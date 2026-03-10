@@ -1,0 +1,107 @@
+import SwiftUI
+import SentinelShared
+
+/// Timeline of recent events.
+struct EventListView: View {
+    @EnvironmentObject var registry: AgentRegistry
+
+    var body: some View {
+        if registry.recentEvents.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "bell.slash")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                Text("No events yet")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(registry.recentEvents) { event in
+                        EventRowView(event: event)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+}
+
+struct EventRowView: View {
+    let event: AgentEvent
+    @EnvironmentObject var registry: AgentRegistry
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: event.eventType.sfSymbol)
+                .font(.body)
+                .foregroundStyle(eventColor)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(event.eventType.displayName)
+                        .font(.caption.bold())
+                        .foregroundStyle(eventColor)
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text(event.displayLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(event.summary)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                Text(formatTime(event.timestamp))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            if !event.paneId.isEmpty {
+                Button {
+                    JumpController.jumpToPane(
+                        paneId: event.paneId,
+                        windowId: event.windowId,
+                        sessionName: event.sessionName
+                    )
+                    registry.acknowledgeEvent(id: event.id)
+                } label: {
+                    Image(systemName: "arrow.right.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            event.acknowledged ? Color.clear : Color.accentColor.opacity(0.05),
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+    }
+
+    private var eventColor: Color {
+        switch event.eventType {
+        case .permissionRequested: return .orange
+        case .inputRequested: return .blue
+        case .taskCompleted: return .green
+        case .errorDetected: return .red
+        case .stalledOrWaiting: return .gray
+        }
+    }
+
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+}
