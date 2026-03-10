@@ -176,11 +176,12 @@ struct RunCommand: ParsableCommand {
     }
 
     private func launchMonitorIfNeeded() {
-        let candidates: [(String, [String])] = [
-            ("/usr/local/bin/sentinel-monitor", []),
-            ("/opt/homebrew/bin/sentinel-monitor", []),
-            ("/usr/bin/env", ["sentinel-monitor"]),
-        ]
+        var candidates: [(String, [String])] = []
+        let executablePath = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        candidates.append((executablePath.appendingPathComponent("sentinel-monitor").path, []))
+        candidates.append(("/usr/local/bin/sentinel-monitor", []))
+        candidates.append(("/opt/homebrew/bin/sentinel-monitor", []))
+        candidates.append(("/usr/bin/env", ["sentinel-monitor"]))
         for candidate in candidates {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: candidate.0)
