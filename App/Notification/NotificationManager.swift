@@ -44,6 +44,11 @@ final class NotificationManager: @unchecked Sendable {
     }
 
     private func upsert(event: AgentEvent) {
+        if event.eventType == .taskCompleted {
+            events.insert(event, at: 0)
+            return
+        }
+
         if let index = events.firstIndex(where: { $0.dedupeKey == event.dedupeKey }) {
             let oldId = events[index].id
             if oldId != event.id {
@@ -70,6 +75,10 @@ final class NotificationManager: @unchecked Sendable {
 
     private func scheduleDismissTimer(for event: AgentEvent) {
         timers[event.id]?.invalidate()
+        if event.eventType.requiresManualDismissInOverlay {
+            timers.removeValue(forKey: event.id)
+            return
+        }
         let config = configProvider()
         let configured = event.priority == .high ? config.highDismissSeconds : config.normalDismissSeconds
         let timeout = max(configured, event.eventType.autoDismissSeconds)

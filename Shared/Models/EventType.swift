@@ -39,6 +39,16 @@ public enum EventType: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// Keep important items pinned in the overlay until user handles them.
+    public var requiresManualDismissInOverlay: Bool {
+        switch self {
+        case .permissionRequested, .inputRequested, .taskCompleted:
+            return true
+        case .errorDetected, .stalledOrWaiting:
+            return false
+        }
+    }
+
     public var displayName: String {
         switch self {
         case .permissionRequested: return "Permission Requested"

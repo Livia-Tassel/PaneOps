@@ -21,7 +21,7 @@ public enum BuiltinRules {
             eventType: .taskCompleted,
             priority: .normal,
             isBuiltin: true,
-            cooldownSeconds: 5
+            cooldownSeconds: 0
         ),
         Rule(
             id: UUID(uuidString: "00000001-0001-0001-0001-000000000001")!,

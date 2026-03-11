@@ -38,9 +38,6 @@ public enum JumpPolicy {
         if event.matchedRule.hasPrefix("monitor-expire-") {
             return .unavailable(reason: "Agent pane expired")
         }
-        if event.eventType == .taskCompleted {
-            return .unavailable(reason: "Task already completed")
-        }
         return .available
     }
 }

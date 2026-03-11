@@ -244,9 +244,16 @@ actor MonitorState {
     private func shouldAccept(event: AgentEvent) -> Bool {
         let now = nowProvider()
         let dedupeKey = canonicalDedupeKey(for: event)
-        let window = event.eventType == .stalledOrWaiting
-            ? max(60, config.eventDedupeWindowSeconds)
-            : config.eventDedupeWindowSeconds
+        let window: TimeInterval
+        switch event.eventType {
+        case .stalledOrWaiting:
+            window = max(60, config.eventDedupeWindowSeconds)
+        case .taskCompleted:
+            // Keep completion notifications responsive for rapid Q&A turns.
+            window = 1
+        case .permissionRequested, .inputRequested, .errorDetected:
+            window = config.eventDedupeWindowSeconds
+        }
 
         if let seenAt = dedupeSeenAt[dedupeKey], now.timeIntervalSince(seenAt) < window {
             return false

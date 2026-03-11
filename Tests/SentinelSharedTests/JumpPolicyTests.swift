@@ -15,7 +15,7 @@ final class JumpPolicyTests: XCTestCase {
         XCTAssertFalse(JumpPolicy.availability(for: completed).isAvailable)
     }
 
-    func testEventAvailabilityRejectsExpiredAndCompletedEvents() {
+    func testEventAvailabilityRejectsExpiredEventsAndAllowsCompleted() {
         let baseAgentId = UUID()
         let completed = AgentEvent(
             agentId: baseAgentId,
@@ -26,7 +26,7 @@ final class JumpPolicyTests: XCTestCase {
             matchedRule: "rule",
             paneId: "%10"
         )
-        XCTAssertFalse(JumpPolicy.availability(for: completed).isAvailable)
+        XCTAssertTrue(JumpPolicy.availability(for: completed).isAvailable)
 
         let expired = AgentEvent(
             agentId: baseAgentId,
