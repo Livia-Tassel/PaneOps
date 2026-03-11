@@ -129,6 +129,18 @@ public struct TmuxClient: Sendable {
             }
     }
 
+    /// Raw `tmux display-message -p` helper for resilient fallback probing.
+    public func displayValue(format: String, target: String? = nil) -> String? {
+        var args = ["display-message", "-p"]
+        if let target, !target.isEmpty {
+            args.append(contentsOf: ["-t", target])
+        }
+        args.append(format)
+        let result = runTmux(args)
+        guard result.exitCode == 0 else { return nil }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Private
 
     private func parsePaneLine(_ line: String) -> PaneInfo? {

@@ -202,9 +202,20 @@ struct RunCommand: ParsableCommand {
             if let pane = tmux.paneInfo(for: paneId) {
                 return pane
             }
+            if let pane = fallbackPaneInfo(using: tmux, paneId: paneId) {
+                return pane
+            }
         }
 
-        return tmux.currentPane()
+        if let current = tmux.currentPane() {
+            return current
+        }
+
+        if let fallbackPaneId = tmux.displayValue(format: "#{pane_id}"),
+           !fallbackPaneId.isEmpty {
+            return fallbackPaneInfo(using: tmux, paneId: fallbackPaneId)
+        }
+        return nil
     }
 
     static func requireTmuxContext(_ paneInfo: PaneInfo?) throws -> PaneInfo {
@@ -216,14 +227,46 @@ struct RunCommand: ParsableCommand {
                 """
             )
         }
-        guard !paneInfo.paneId.isEmpty, !paneInfo.sessionName.isEmpty, !paneInfo.windowId.isEmpty else {
+        guard !paneInfo.paneId.isEmpty else {
             throw ValidationError(
                 """
-                Failed to resolve complete tmux context (pane/session/window).
+                Failed to resolve tmux pane id.
                 Please run inside an attached tmux pane and retry.
                 """
             )
         }
         return paneInfo
+    }
+
+    private func fallbackPaneInfo(using tmux: TmuxClient, paneId: String) -> PaneInfo? {
+        guard !paneId.isEmpty else { return nil }
+
+        let sessionName = tmux.displayValue(format: "#{session_name}", target: paneId)
+            ?? tmux.displayValue(format: "#{session_name}")
+            ?? ""
+        let sessionId = tmux.displayValue(format: "#{session_id}", target: paneId)
+            ?? tmux.displayValue(format: "#{session_id}")
+            ?? ""
+        let windowId = tmux.displayValue(format: "#{window_id}", target: paneId)
+            ?? tmux.displayValue(format: "#{window_id}")
+            ?? ""
+        let windowName = tmux.displayValue(format: "#{window_name}", target: paneId)
+            ?? tmux.displayValue(format: "#{window_name}")
+            ?? ""
+        let paneTitle = tmux.displayValue(format: "#{pane_title}", target: paneId)
+            ?? tmux.displayValue(format: "#{pane_title}")
+            ?? ""
+
+        return PaneInfo(
+            paneId: paneId,
+            windowId: windowId,
+            sessionName: sessionName,
+            sessionId: sessionId,
+            windowName: windowName,
+            paneTitle: paneTitle,
+            panePid: "",
+            paneCurrentPath: FileManager.default.currentDirectoryPath,
+            paneActive: true
+        )
     }
 }

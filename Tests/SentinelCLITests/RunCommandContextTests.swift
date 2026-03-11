@@ -9,7 +9,7 @@ final class RunCommandContextTests: XCTestCase {
 
     func testRequireTmuxContextRejectsIncompleteContext() {
         let incomplete = PaneInfo(
-            paneId: "%12",
+            paneId: "",
             windowId: "",
             sessionName: "main",
             sessionId: "$1",
