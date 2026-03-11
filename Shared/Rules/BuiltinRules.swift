@@ -28,17 +28,14 @@ public enum BuiltinRules {
             name: "Claude: Permission prompt",
             agentType: .claude,
             patterns: [
-                RulePattern(kind: .keyword, value: "Do you want to proceed"),
-                RulePattern(kind: .keyword, value: "Allow once"),
-                RulePattern(kind: .keyword, value: "Allow always"),
-                RulePattern(kind: .keyword, value: "Deny once"),
-                RulePattern(kind: .keyword, value: "Deny always"),
-                RulePattern(kind: .keyword, value: "want to allow"),
-                RulePattern(kind: .regex, value: "(?i)approval required"),
-                RulePattern(kind: .regex, value: "(?i)permission required"),
-                RulePattern(kind: .regex, value: "(?i)requires your approval"),
-                RulePattern(kind: .regex, value: "(?i)requesting permission"),
-                RulePattern(kind: .regex, value: "(?i)(allow|proceed).*(y/n|yes/no)"),
+                RulePattern(
+                    kind: .regex,
+                    value: "(?i)(allow|approve|confirm|proceed|deny|permission).*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                ),
+                RulePattern(
+                    kind: .regex,
+                    value: "(?i)\\?.*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                ),
             ],
             eventType: .permissionRequested,
             priority: .high,
@@ -97,9 +94,14 @@ public enum BuiltinRules {
             name: "Codex: Approve changes",
             agentType: .codex,
             patterns: [
-                RulePattern(kind: .keyword, value: "approve changes"),
-                RulePattern(kind: .keyword, value: "approve this change"),
-                RulePattern(kind: .regex, value: "(?i)(approve|allow).*(y/n|yes/no)"),
+                RulePattern(
+                    kind: .regex,
+                    value: "(?i)(approve|allow|confirm|proceed|deny).*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                ),
+                RulePattern(
+                    kind: .regex,
+                    value: "(?i)\\?.*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                ),
             ],
             eventType: .permissionRequested,
             priority: .high,
@@ -144,9 +146,14 @@ public enum BuiltinRules {
             name: "Gemini: Confirm action",
             agentType: .gemini,
             patterns: [
-                RulePattern(kind: .keyword, value: "Confirm"),
-                RulePattern(kind: .keyword, value: "confirm action"),
-                RulePattern(kind: .regex, value: "(?i)(allow|approve|confirm).*(y/n|yes/no)"),
+                RulePattern(
+                    kind: .regex,
+                    value: "(?i)(confirm|allow|approve|proceed|deny).*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                ),
+                RulePattern(
+                    kind: .regex,
+                    value: "(?i)\\?.*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                ),
             ],
             eventType: .permissionRequested,
             priority: .high,

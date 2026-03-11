@@ -67,8 +67,8 @@ final class OutputProcessorTests: XCTestCase {
             expectation.fulfill()
         }
 
-        // ANSI-colored "Do you want to proceed"
-        let data = "\u{1b}[1;33mDo you want to proceed?\u{1b}[0m\n".data(using: .utf8)!
+        // ANSI-colored "Do you want to proceed? (y/n)"
+        let data = "\u{1b}[1;33mDo you want to proceed? (y/n)\u{1b}[0m\n".data(using: .utf8)!
         processor.processData(data)
 
         wait(for: [expectation], timeout: 2.0)
@@ -157,7 +157,7 @@ final class OutputProcessorTests: XCTestCase {
         }
 
         processor.processData("Do you want".data(using: .utf8)!)
-        processor.processData(" to proceed?\n".data(using: .utf8)!)
+        processor.processData(" to proceed? (y/n)\n".data(using: .utf8)!)
 
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(events.value.first?.eventType, .permissionRequested)

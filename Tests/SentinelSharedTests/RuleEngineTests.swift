@@ -145,4 +145,18 @@ final class RuleEngineTests: XCTestCase {
         let match = engine.match(line: line, agentType: .claude, agentId: agentId)
         XCTAssertTrue(match == nil || match?.rule.eventType != .permissionRequested)
     }
+
+    func testClaudePermissionRequiresYesNoSignal() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let falsePositiveLine = "Approval required before continuing."
+        let validPromptLine = "Do you want to proceed? (yes/no)"
+
+        let first = engine.match(line: falsePositiveLine, agentType: .claude, agentId: agentId)
+        XCTAssertTrue(first == nil || first?.rule.eventType != .permissionRequested)
+
+        let second = engine.match(line: validPromptLine, agentType: .claude, agentId: agentId)
+        XCTAssertEqual(second?.rule.eventType, .permissionRequested)
+    }
 }
