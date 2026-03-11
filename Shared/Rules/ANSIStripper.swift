@@ -7,7 +7,7 @@ public struct ANSIStripper: Sendable {
     private static let patterns: [(label: String, regex: NSRegularExpression)] = {
         let defs: [(String, String)] = [
             // CSI sequences: ESC [ ... final_byte
-            ("CSI", "\u{1b}\\[[0-9;]*[A-Za-z]"),
+            ("CSI", "\u{1b}\\[[0-?]*[ -/]*[@-~]"),
             // OSC sequences: ESC ] ... BEL or ESC ] ... ST
             ("OSC_BEL", "\u{1b}\\][^\u{07}]*\u{07}"),
             ("OSC_ST", "\u{1b}\\][^\u{1b}]*\u{1b}\\\\"),

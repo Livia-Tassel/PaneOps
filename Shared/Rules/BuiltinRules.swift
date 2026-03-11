@@ -30,11 +30,7 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(
                     kind: .regex,
-                    value: "(?i)(allow|approve|confirm|proceed|deny|permission).*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
-                ),
-                RulePattern(
-                    kind: .regex,
-                    value: "(?i)\\?.*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                    value: "(?i)\\b(allow|approve|confirm|proceed|deny|permission|grant)\\b[^\\n]{0,200}(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))"
                 ),
             ],
             eventType: .permissionRequested,
@@ -47,10 +43,8 @@ public enum BuiltinRules {
             name: "Claude: Task completed",
             agentType: .claude,
             patterns: [
-                RulePattern(kind: .keyword, value: "Task completed"),
-                RulePattern(kind: .keyword, value: "Completed in"),
-                RulePattern(kind: .keyword, value: "task complete"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed( successfully)?\\.?\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*all done\\.?\\s*$"),
             ],
             eventType: .taskCompleted,
             priority: .normal,
@@ -80,9 +74,8 @@ public enum BuiltinRules {
             name: "Codex: Input prompt",
             agentType: .codex,
             patterns: [
-                RulePattern(kind: .regex, value: "(?i)^\\s*>\\s*$"),
-                RulePattern(kind: .keyword, value: "Press Enter to continue"),
-                RulePattern(kind: .keyword, value: "waiting for your input"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*press\\s+enter\\s+to\\s+continue\\.?\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*.*\\b(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))\\s*$"),
             ],
             eventType: .inputRequested,
             priority: .normal,
@@ -96,11 +89,7 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(
                     kind: .regex,
-                    value: "(?i)(approve|allow|confirm|proceed|deny).*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
-                ),
-                RulePattern(
-                    kind: .regex,
-                    value: "(?i)\\?.*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                    value: "(?i)\\b(approve|allow|confirm|proceed|deny|permission|grant)\\b[^\\n]{0,200}(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))"
                 ),
             ],
             eventType: .permissionRequested,
@@ -113,8 +102,7 @@ public enum BuiltinRules {
             name: "Codex: Completed",
             agentType: .codex,
             patterns: [
-                RulePattern(kind: .keyword, value: "completed successfully"),
-                RulePattern(kind: .keyword, value: "task completed"),
+                RulePattern(kind: .regex, value: "^\\s*[❯›>]\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed( successfully)?\\.?\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*all done\\.?\\s*$"),
             ],
@@ -133,8 +121,8 @@ public enum BuiltinRules {
             name: "Gemini: Input prompt",
             agentType: .gemini,
             patterns: [
-                RulePattern(kind: .keyword, value: "Your input"),
-                RulePattern(kind: .keyword, value: "Choose an option"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*press\\s+enter\\s+to\\s+continue\\.?\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*.*\\b(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))\\s*$"),
             ],
             eventType: .inputRequested,
             priority: .normal,
@@ -148,11 +136,7 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(
                     kind: .regex,
-                    value: "(?i)(confirm|allow|approve|proceed|deny).*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
-                ),
-                RulePattern(
-                    kind: .regex,
-                    value: "(?i)\\?.*(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n)"
+                    value: "(?i)\\b(confirm|allow|approve|proceed|deny|permission|grant)\\b[^\\n]{0,200}(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))"
                 ),
             ],
             eventType: .permissionRequested,
@@ -165,9 +149,9 @@ public enum BuiltinRules {
             name: "Gemini: Done/Finished",
             agentType: .gemini,
             patterns: [
-                RulePattern(kind: .keyword, value: "Done"),
-                RulePattern(kind: .keyword, value: "Finished"),
-                RulePattern(kind: .keyword, value: "Task completed"),
+                RulePattern(kind: .regex, value: "^\\s*[❯›>]\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*done\\.?\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*finished\\.?\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed\\.?\\s*$"),
             ],
             eventType: .taskCompleted,
@@ -185,9 +169,8 @@ public enum BuiltinRules {
             name: "Universal: Awaiting input",
             agentType: nil,
             patterns: [
-                RulePattern(kind: .regex, value: "(?i)waiting for (user )?input"),
-                RulePattern(kind: .regex, value: "(?i)press enter to continue"),
-                RulePattern(kind: .regex, value: "(?i)enter (yes/no|y/n)"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*press\\s+enter\\s+to\\s+continue\\.?\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*.*\\b(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))\\s*$"),
             ],
             eventType: .inputRequested,
             priority: .normal,

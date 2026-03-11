@@ -14,6 +14,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private let onEvent: @Sendable (AgentEvent) -> Void
     private let debugMode: Bool
     private let debugFile: FileHandle?
+    private let suppressInteractiveUntilFirstInput: Bool
 
     // Rate limiting
     private let rateLimitLinesPerSec: Int
@@ -33,6 +34,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private let repeatedLineSuppressionSeconds: TimeInterval = 1.2
     private var lastBufferedCandidateKey = ""
     private var lastBufferedCandidateAt = Date.distantPast
+    private var hasObservedUserInput = false
 
     public init(
         agentId: UUID,
@@ -45,6 +47,7 @@ public final class OutputProcessor: @unchecked Sendable {
         stallTimeout: TimeInterval = 120,
         rateLimitLinesPerSec: Int = 100,
         debugMode: Bool = false,
+        suppressInteractiveUntilFirstInput: Bool = false,
         onEvent: @escaping @Sendable (AgentEvent) -> Void
     ) {
         self.agentId = agentId
@@ -57,6 +60,7 @@ public final class OutputProcessor: @unchecked Sendable {
         self.stallTimeout = stallTimeout
         self.rateLimitLinesPerSec = rateLimitLinesPerSec
         self.debugMode = debugMode
+        self.suppressInteractiveUntilFirstInput = suppressInteractiveUntilFirstInput
         self.onEvent = onEvent
 
         if debugMode {
@@ -122,12 +126,23 @@ public final class OutputProcessor: @unchecked Sendable {
         ruleEngine.updateRules(rules)
     }
 
+    /// Let the processor know the user has typed into the PTY.
+    /// This suppresses startup banner false positives for interactive events.
+    public func noteUserInput(_ data: Data) {
+        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return }
+        for byte in data {
+            if byte >= 0x21 || byte >= 0x80 {
+                hasObservedUserInput = true
+                return
+            }
+        }
+    }
+
     // MARK: - Private
 
     private func processLine(_ rawLine: String) {
         let stripped = stripper.strip(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stripped.isEmpty else { return }
-        guard !shouldSuppressRepeatedLine(stripped) else { return }
 
         // Debug: log all stripped lines to file
         if debugMode, let fh = debugFile {
@@ -136,6 +151,9 @@ public final class OutputProcessor: @unchecked Sendable {
         }
 
         if let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) {
+            if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
+            if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
+            guard !shouldSuppressRepeatedLine(stripped) else { return }
             emitMatchedEvent(match, summary: stripped)
         }
     }
@@ -199,6 +217,8 @@ public final class OutputProcessor: @unchecked Sendable {
         else {
             return
         }
+        if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
+        if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
 
         let now = Date()
         let key = "\(match.rule.id.uuidString)|\(stableKeyFragment(from: stripped))"
@@ -232,5 +252,57 @@ public final class OutputProcessor: @unchecked Sendable {
             sessionName: sessionName
         )
         onEvent(event)
+    }
+
+    private func shouldSuppressInteractiveEventBeforeInput(_ eventType: EventType) -> Bool {
+        guard suppressInteractiveUntilFirstInput else { return false }
+        guard !hasObservedUserInput else { return false }
+        switch eventType {
+        case .inputRequested, .permissionRequested, .taskCompleted:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldSuppressLikelyMetaOrControlLine(_ line: String, eventType: EventType) -> Bool {
+        if isLikelyControlSequenceResidue(line) { return true }
+
+        switch eventType {
+        case .inputRequested, .permissionRequested, .taskCompleted:
+            return isLikelyRuleDescriptionLine(line)
+        default:
+            return false
+        }
+    }
+
+    private func isLikelyControlSequenceResidue(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        if lowered.contains("[?2004h")
+            || lowered.contains("[?1004h")
+            || lowered.contains("[?2026h")
+            || lowered.contains("[>7u")
+            || lowered.contains("[?u")
+        {
+            return true
+        }
+        return false
+    }
+
+    private func isLikelyRuleDescriptionLine(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        let metaMarkers = [
+            "rule", "rules", "regex", "keyword", "pattern", "event type",
+            "input requested", "permission requested", "task completed",
+            "detect events", "built-in", "builtin", "example", "examples",
+            "内置示例", "匹配规则", "关键词", "正则", "事件类型", "提示词",
+        ]
+        if metaMarkers.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+        if lowered.contains("allow|") || lowered.contains("|allow") || lowered.contains("proceed|") {
+            return true
+        }
+        return false
     }
 }

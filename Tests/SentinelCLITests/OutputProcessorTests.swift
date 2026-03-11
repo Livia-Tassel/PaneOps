@@ -215,6 +215,51 @@ final class OutputProcessorTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(receivedEvent.value?.eventType, .permissionRequested)
     }
+
+    func testSuppressesMetaRuleDescriptionFalsePositive() {
+        let eventEmitted = LockedBox<Bool>(false)
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "meta",
+            rules: rules,
+            stallTimeout: 999
+        ) { _ in
+            eventEmitted.withLock { $0 = true }
+        }
+
+        let line = "- Claude: Do you want to proceed / Allow once / allow|proceed ... yes/no\n"
+        processor.processData(line.data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertFalse(eventEmitted.value)
+    }
+
+    func testSuppressesInteractiveEventsBeforeFirstInputWhenEnabled() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "gate",
+            rules: rules,
+            stallTimeout: 999,
+            suppressInteractiveUntilFirstInput: true
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.processData("❯\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("❯\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.last?.eventType, .taskCompleted)
+    }
 }
 
 private final class LockedBox<T>: @unchecked Sendable {

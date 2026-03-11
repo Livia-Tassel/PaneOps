@@ -159,4 +159,13 @@ final class RuleEngineTests: XCTestCase {
         let second = engine.match(line: validPromptLine, agentType: .claude, agentId: agentId)
         XCTAssertEqual(second?.rule.eventType, .permissionRequested)
     }
+
+    func testUniversalInputRuleDoesNotMatchNarrativeSentence() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+        let line = "rules to detect events (e.g., agent waiting for input, errors, task completion)"
+
+        let match = engine.match(line: line, agentType: .codex, agentId: agentId)
+        XCTAssertTrue(match == nil || match?.rule.eventType != .inputRequested)
+    }
 }

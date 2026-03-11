@@ -49,4 +49,10 @@ final class ANSIStripperTests: XCTestCase {
         let result = stripper.strip(input)
         XCTAssertEqual(result, "Error: something failed")
     }
+
+    func testStripPrivateModeCSISequences() {
+        let input = "\u{1b}[?2004h\u{1b}[>7u\u{1b}[?1004hReady\u{1b}[?2004l"
+        let result = stripper.strip(input)
+        XCTAssertEqual(result, "Ready")
+    }
 }

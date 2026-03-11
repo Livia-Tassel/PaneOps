@@ -87,7 +87,8 @@ struct RunCommand: ParsableCommand {
             rules: rules,
             stallTimeout: config.stallTimeoutSeconds,
             rateLimitLinesPerSec: config.outputRateLimitLinesPerSec,
-            debugMode: debug || config.debugMode
+            debugMode: debug || config.debugMode,
+            suppressInteractiveUntilFirstInput: agentType != .custom
         ) { event in
             // Forward to IPC
             try? ipcClient?.send(.event(event))
@@ -122,6 +123,7 @@ struct RunCommand: ParsableCommand {
                 let bytesRead = Foundation.read(FileHandle.standardInput.fileDescriptor, buffer, bufferSize)
                 guard bytesRead > 0 else { break }
                 let data = Data(bytes: buffer, count: bytesRead)
+                processor.noteUserInput(data)
                 pty.write(data)
             }
         }
