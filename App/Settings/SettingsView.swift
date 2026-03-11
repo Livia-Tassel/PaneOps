@@ -86,6 +86,12 @@ struct GeneralSettingsView: View {
                             Text("seconds")
                         }
                         HStack {
+                            Text("Active TTL:")
+                            TextField("", value: $config.activeAgentTTLSeconds, format: .number)
+                                .frame(width: 50)
+                            Text("seconds")
+                        }
+                        HStack {
                             Text("Rate limit:")
                             TextField("", value: $config.outputRateLimitLinesPerSec, format: .number)
                                 .frame(width: 50)
@@ -96,10 +102,18 @@ struct GeneralSettingsView: View {
                 }
 
                 GroupBox("Storage") {
-                    HStack {
-                        Text("Max stored events:")
-                        TextField("", value: $config.maxStoredEvents, format: .number)
-                            .frame(width: 60)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Max stored events:")
+                            TextField("", value: $config.maxStoredEvents, format: .number)
+                                .frame(width: 60)
+                        }
+                        HStack {
+                            Text("Actionable window:")
+                            TextField("", value: $config.actionableEventWindowSeconds, format: .number)
+                                .frame(width: 60)
+                            Text("seconds")
+                        }
                     }
                     .padding(4)
                 }

@@ -29,7 +29,7 @@ struct AgentListView: View {
                     }
 
                     let inactive = registry.allAgents.filter {
-                        $0.status == .completed || $0.status == .errored
+                        $0.status == .completed || $0.status == .errored || $0.status == .expired
                     }
                     if !inactive.isEmpty {
                         Divider()

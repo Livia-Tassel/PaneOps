@@ -56,7 +56,8 @@ final class NotificationManager: @unchecked Sendable {
     private func scheduleDismissTimer(for event: AgentEvent) {
         timers[event.id]?.invalidate()
         let config = configProvider()
-        let timeout = event.priority == .high ? config.highDismissSeconds : config.normalDismissSeconds
+        let configured = event.priority == .high ? config.highDismissSeconds : config.normalDismissSeconds
+        let timeout = max(configured, event.eventType.autoDismissSeconds)
         let timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.dismiss(eventId: event.id)

@@ -10,6 +10,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var outputRateLimitLinesPerSec: Int
     public var maxStoredEvents: Int
     public var eventDedupeWindowSeconds: TimeInterval
+    public var staleAgentGraceSeconds: TimeInterval
+    public var activeAgentTTLSeconds: TimeInterval
+    public var actionableEventWindowSeconds: TimeInterval
     public var customRules: [Rule]
     public var disabledBuiltinRuleIds: Set<UUID>
     public var debugMode: Bool
@@ -23,6 +26,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
         outputRateLimitLinesPerSec: Int = 100,
         maxStoredEvents: Int = 1000,
         eventDedupeWindowSeconds: TimeInterval = 6,
+        staleAgentGraceSeconds: TimeInterval = 30,
+        activeAgentTTLSeconds: TimeInterval = 900,
+        actionableEventWindowSeconds: TimeInterval = 3600,
         customRules: [Rule] = [],
         disabledBuiltinRuleIds: Set<UUID> = [],
         debugMode: Bool = false
@@ -35,6 +41,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.outputRateLimitLinesPerSec = outputRateLimitLinesPerSec
         self.maxStoredEvents = maxStoredEvents
         self.eventDedupeWindowSeconds = eventDedupeWindowSeconds
+        self.staleAgentGraceSeconds = staleAgentGraceSeconds
+        self.activeAgentTTLSeconds = activeAgentTTLSeconds
+        self.actionableEventWindowSeconds = actionableEventWindowSeconds
         self.customRules = customRules
         self.disabledBuiltinRuleIds = disabledBuiltinRuleIds
         self.debugMode = debugMode
@@ -49,6 +58,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
         case outputRateLimitLinesPerSec
         case maxStoredEvents
         case eventDedupeWindowSeconds
+        case staleAgentGraceSeconds
+        case activeAgentTTLSeconds
+        case actionableEventWindowSeconds
         case customRules
         case disabledBuiltinRuleIds
         case debugMode
@@ -64,6 +76,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.outputRateLimitLinesPerSec = try c.decodeIfPresent(Int.self, forKey: .outputRateLimitLinesPerSec) ?? 100
         self.maxStoredEvents = try c.decodeIfPresent(Int.self, forKey: .maxStoredEvents) ?? 1000
         self.eventDedupeWindowSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .eventDedupeWindowSeconds) ?? 6
+        self.staleAgentGraceSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .staleAgentGraceSeconds) ?? 30
+        self.activeAgentTTLSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .activeAgentTTLSeconds) ?? 900
+        self.actionableEventWindowSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .actionableEventWindowSeconds) ?? 3600
         self.customRules = try c.decodeIfPresent([Rule].self, forKey: .customRules) ?? []
         self.disabledBuiltinRuleIds = try c.decodeIfPresent(Set<UUID>.self, forKey: .disabledBuiltinRuleIds) ?? []
         self.debugMode = try c.decodeIfPresent(Bool.self, forKey: .debugMode) ?? false

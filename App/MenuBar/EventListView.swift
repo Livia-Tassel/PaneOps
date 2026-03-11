@@ -4,9 +4,10 @@ import SentinelShared
 /// Timeline of recent events.
 struct EventListView: View {
     @EnvironmentObject var registry: AgentRegistry
+    @State private var showAllEvents = false
 
     var body: some View {
-        if registry.recentEvents.isEmpty {
+        if displayedEvents.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "bell.slash")
                     .font(.largeTitle)
@@ -17,16 +18,31 @@ struct EventListView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(registry.recentEvents) { event in
-                        EventRowView(event: event)
-                    }
+            VStack(spacing: 6) {
+                HStack {
+                    Toggle("Show duplicates", isOn: $showAllEvents)
+                        .toggleStyle(.switch)
+                        .font(.caption)
+                    Spacer()
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(displayedEvents) { event in
+                            EventRowView(event: event)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                }
             }
         }
+    }
+
+    private var displayedEvents: [AgentEvent] {
+        showAllEvents ? registry.timelineEvents : registry.recentEvents
     }
 }
 
@@ -83,8 +99,12 @@ struct EventRowView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(
-            event.acknowledged ? Color.clear : Color.accentColor.opacity(0.05),
+                .background(
+            EventPolicy.isActionable(
+                event,
+                now: Date(),
+                actionableWindowSeconds: registry.config.actionableEventWindowSeconds
+            ) ? Color.accentColor.opacity(0.05) : Color.clear,
             in: RoundedRectangle(cornerRadius: 6)
         )
     }

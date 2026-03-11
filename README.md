@@ -43,6 +43,12 @@ Or via make:
 make build
 ```
 
+One-command install (recommended):
+
+```bash
+sudo make install
+```
+
 ## Run (Development)
 
 1. Start the monitor daemon:
@@ -67,6 +73,27 @@ Example for Codex:
 
 ```bash
 .build/debug/agent-sentinel run --agent codex --label tests -- codex
+```
+
+## Daily Use (After Install)
+
+```bash
+make up
+```
+
+Then run agents in tmux:
+
+```bash
+agent-sentinel run --agent claude --label auth-fix -- claude
+agent-sentinel run --agent codex --label tests -- codex
+```
+
+Useful commands:
+
+```bash
+make status
+make logs
+make down
 ```
 
 ## CLI Commands

@@ -66,6 +66,7 @@ struct AgentRowView: View {
         case .completed: return .green
         case .errored: return .red
         case .stalled: return .gray
+        case .expired: return .secondary
         }
     }
 

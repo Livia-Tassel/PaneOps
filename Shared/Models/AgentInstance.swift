@@ -7,6 +7,7 @@ public enum AgentStatus: String, Codable, Sendable {
     case completed
     case errored
     case stalled
+    case expired
 }
 
 /// A monitored agent instance, representing one CLI wrapper process.

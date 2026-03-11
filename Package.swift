@@ -46,5 +46,9 @@ let package = Package(
             name: "SentinelCLITests",
             dependencies: ["SentinelCLI", "SentinelShared"]
         ),
+        .testTarget(
+            name: "SentinelMonitorTests",
+            dependencies: ["SentinelMonitor", "SentinelShared"]
+        ),
     ]
 )

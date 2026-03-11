@@ -21,11 +21,21 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
     }
 
     var recentEvents: [AgentEvent] {
+        deduplicatedRecentEvents().prefix(50).map { $0 }
+    }
+
+    var timelineEvents: [AgentEvent] {
         events.suffix(50).reversed()
     }
 
     var unacknowledgedCount: Int {
-        events.filter { !$0.acknowledged }.count
+        deduplicatedRecentEvents().filter {
+            EventPolicy.isActionable(
+                $0,
+                now: Date(),
+                actionableWindowSeconds: config.actionableEventWindowSeconds
+            )
+        }.count
     }
 
     func register(_ agent: AgentInstance) {
@@ -41,6 +51,11 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
     }
 
     func updateStatus(agentId: UUID, event: AgentEvent) {
+        if event.matchedRule.hasPrefix("monitor-expire-") {
+            agents[agentId]?.status = .expired
+            agents[agentId]?.lastActiveAt = event.timestamp
+            return
+        }
         switch event.eventType {
         case .permissionRequested, .inputRequested:
             agents[agentId]?.status = .waiting
@@ -55,7 +70,11 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
     }
 
     func addEvent(_ event: AgentEvent) {
-        events.append(event)
+        var normalized = event
+        if normalized.eventType == .taskCompleted {
+            normalized.acknowledged = true
+        }
+        events.append(normalized)
         // Keep max 200 in memory
         if events.count > 200 {
             events.removeFirst(events.count - 200)
@@ -64,7 +83,11 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
 
     func applySnapshot(_ snapshot: MonitorSnapshot) {
         agents = Dictionary(uniqueKeysWithValues: snapshot.agents.map { ($0.id, $0) })
-        events = Array(snapshot.events.suffix(200))
+        events = EventPolicy.normalizeHistory(
+            Array(snapshot.events.suffix(200)),
+            now: Date(),
+            actionableWindowSeconds: snapshot.config.actionableEventWindowSeconds
+        )
         config = snapshot.config
     }
 
@@ -82,5 +105,20 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
 
     func removeAgent(id: UUID) {
         agents.removeValue(forKey: id)
+    }
+
+    private func deduplicatedRecentEvents() -> [AgentEvent] {
+        let recent = Array(events.suffix(200))
+        var seen: Set<String> = []
+        var deduped: [AgentEvent] = []
+        for event in recent.reversed() { // newest first
+            let key = event.dedupeKey.isEmpty ? "\(event.id.uuidString)" : event.dedupeKey
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            deduped.append(event)
+        }
+        return deduped
     }
 }

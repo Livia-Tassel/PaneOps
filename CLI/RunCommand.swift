@@ -22,11 +22,12 @@ struct RunCommand: ParsableCommand {
     var command: [String]
 
     func run() throws {
-        if command.count == 1, command[0] == "--help" || command[0] == "-h" {
+        let filteredCommand = command.filter { $0 != "--" }
+        if filteredCommand == ["--help"] || filteredCommand == ["-h"] {
             throw CleanExit.helpRequest(self)
         }
 
-        guard !command.isEmpty else {
+        guard !filteredCommand.isEmpty else {
             throw ValidationError("No command specified. Usage: agent-sentinel run -- <command>")
         }
 
@@ -37,7 +38,7 @@ struct RunCommand: ParsableCommand {
             }
             agentType = parsed
         } else {
-            agentType = AgentType.detect(from: command.joined(separator: " "))
+            agentType = AgentType.detect(from: filteredCommand.joined(separator: " "))
         }
 
         // Gather tmux context
@@ -67,11 +68,6 @@ struct RunCommand: ParsableCommand {
         let ipcClient = connectToMonitorAndRegister(instance)
 
         // Set up the PTY wrapper
-        // Filter out "--" separator that ArgumentParser's captureForPassthrough includes
-        let filteredCommand = command.filter { $0 != "--" }
-        guard !filteredCommand.isEmpty else {
-            throw ValidationError("No command specified. Usage: agent-sentinel run -- <command>")
-        }
         let executable = filteredCommand[0]
         let pty: PTYWrapper
         do {
