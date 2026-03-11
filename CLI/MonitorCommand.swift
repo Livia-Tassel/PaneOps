@@ -94,6 +94,6 @@ struct MonitorCommand: ParsableCommand {
         outputTask.cancel()
         inputTask.cancel()
         try? ipcClient?.send(.deregister(agentId: id, exitCode: exitCode))
-        Darwin.exit(exitCode)
+        throw ExitCode(exitCode)
     }
 }

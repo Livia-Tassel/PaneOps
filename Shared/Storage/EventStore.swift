@@ -8,7 +8,7 @@ public final class EventStore: @unchecked Sendable {
 
     public init(fileURL: URL = AppConfig.eventsFile, maxLines: Int = 1000) {
         self.fileURL = fileURL
-        self.maxLines = maxLines
+        self.maxLines = max(1, maxLines)
     }
 
     /// Append an event as a JSONL line.
@@ -77,7 +77,7 @@ public final class EventStore: @unchecked Sendable {
         decoder.dateDecodingStrategy = .iso8601
 
         let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
-        let recentLines = lines.suffix(count)
+        let recentLines = lines.suffix(max(0, count))
 
         return recentLines.compactMap { line in
             guard let lineData = line.data(using: .utf8) else { return nil }

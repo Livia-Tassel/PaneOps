@@ -9,7 +9,7 @@ enum MonitorLaunchMode: Equatable {
 
 @main
 struct SentinelMonitorMain {
-    static let version = "0.1.0"
+    static let version = SentinelVersion.current
 
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
@@ -63,11 +63,19 @@ struct SentinelMonitorMain {
         }
 
         let state = MonitorState()
-        let server = IPCServer(socketPath: AppConfig.socketPath) { message, connection in
-            Task {
-                await state.handle(message, from: connection)
+        let server = IPCServer(
+            socketPath: AppConfig.socketPath,
+            handler: { message, connection in
+                Task {
+                    await state.handle(message, from: connection)
+                }
+            },
+            disconnectHandler: { connection in
+                Task {
+                    await state.clientDisconnected(connection)
+                }
             }
-        }
+        )
 
         Task.detached {
             while !Task.isCancelled {

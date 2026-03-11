@@ -47,6 +47,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         self.customRules = customRules
         self.disabledBuiltinRuleIds = disabledBuiltinRuleIds
         self.debugMode = debugMode
+        self = self.normalized()
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -68,20 +69,37 @@ public struct AppConfig: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.stallTimeoutSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .stallTimeoutSeconds) ?? 120
-        self.maxNotifications = try c.decodeIfPresent(Int.self, forKey: .maxNotifications) ?? 5
-        self.normalDismissSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .normalDismissSeconds) ?? 8
-        self.highDismissSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .highDismissSeconds) ?? 30
-        self.notificationsEnabled = try c.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
-        self.outputRateLimitLinesPerSec = try c.decodeIfPresent(Int.self, forKey: .outputRateLimitLinesPerSec) ?? 100
-        self.maxStoredEvents = try c.decodeIfPresent(Int.self, forKey: .maxStoredEvents) ?? 1000
-        self.eventDedupeWindowSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .eventDedupeWindowSeconds) ?? 6
-        self.staleAgentGraceSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .staleAgentGraceSeconds) ?? 30
-        self.activeAgentTTLSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .activeAgentTTLSeconds) ?? 900
-        self.actionableEventWindowSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .actionableEventWindowSeconds) ?? 3600
-        self.customRules = try c.decodeIfPresent([Rule].self, forKey: .customRules) ?? []
-        self.disabledBuiltinRuleIds = try c.decodeIfPresent(Set<UUID>.self, forKey: .disabledBuiltinRuleIds) ?? []
-        self.debugMode = try c.decodeIfPresent(Bool.self, forKey: .debugMode) ?? false
+        self = AppConfig(
+            stallTimeoutSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .stallTimeoutSeconds) ?? 120,
+            maxNotifications: try c.decodeIfPresent(Int.self, forKey: .maxNotifications) ?? 5,
+            normalDismissSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .normalDismissSeconds) ?? 8,
+            highDismissSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .highDismissSeconds) ?? 30,
+            notificationsEnabled: try c.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true,
+            outputRateLimitLinesPerSec: try c.decodeIfPresent(Int.self, forKey: .outputRateLimitLinesPerSec) ?? 100,
+            maxStoredEvents: try c.decodeIfPresent(Int.self, forKey: .maxStoredEvents) ?? 1000,
+            eventDedupeWindowSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .eventDedupeWindowSeconds) ?? 6,
+            staleAgentGraceSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .staleAgentGraceSeconds) ?? 30,
+            activeAgentTTLSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .activeAgentTTLSeconds) ?? 900,
+            actionableEventWindowSeconds: try c.decodeIfPresent(TimeInterval.self, forKey: .actionableEventWindowSeconds) ?? 3600,
+            customRules: try c.decodeIfPresent([Rule].self, forKey: .customRules) ?? [],
+            disabledBuiltinRuleIds: try c.decodeIfPresent(Set<UUID>.self, forKey: .disabledBuiltinRuleIds) ?? [],
+            debugMode: try c.decodeIfPresent(Bool.self, forKey: .debugMode) ?? false
+        )
+    }
+
+    public func normalized() -> AppConfig {
+        var normalized = self
+        normalized.stallTimeoutSeconds = Self.clampTime(normalized.stallTimeoutSeconds, minimum: 5)
+        normalized.maxNotifications = max(normalized.maxNotifications, 1)
+        normalized.normalDismissSeconds = Self.clampTime(normalized.normalDismissSeconds, minimum: 1)
+        normalized.highDismissSeconds = Self.clampTime(normalized.highDismissSeconds, minimum: 1)
+        normalized.outputRateLimitLinesPerSec = max(normalized.outputRateLimitLinesPerSec, 1)
+        normalized.maxStoredEvents = max(normalized.maxStoredEvents, 1)
+        normalized.eventDedupeWindowSeconds = max(normalized.eventDedupeWindowSeconds, 0)
+        normalized.staleAgentGraceSeconds = Self.clampTime(normalized.staleAgentGraceSeconds, minimum: 1)
+        normalized.activeAgentTTLSeconds = Self.clampTime(normalized.activeAgentTTLSeconds, minimum: 30)
+        normalized.actionableEventWindowSeconds = Self.clampTime(normalized.actionableEventWindowSeconds, minimum: 60)
+        return normalized
     }
 
     // MARK: - Paths
@@ -126,7 +144,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         do {
             let data = try Data(contentsOf: configFile)
             let decoder = JSONDecoder()
-            return try decoder.decode(AppConfig.self, from: data)
+            return try decoder.decode(AppConfig.self, from: data).normalized()
         } catch {
             SentinelLogger.storage.info("No config found or decode error, using defaults: \(error.localizedDescription)")
             return AppConfig()
@@ -137,7 +155,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
         try AppConfig.ensureDirectory()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
+        let data = try encoder.encode(normalized())
         try data.write(to: AppConfig.configFile, options: .atomic)
+    }
+
+    private static func clampTime(_ value: TimeInterval, minimum: TimeInterval) -> TimeInterval {
+        guard value.isFinite else { return minimum }
+        return max(value, minimum)
     }
 }

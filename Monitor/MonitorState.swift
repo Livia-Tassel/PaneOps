@@ -7,7 +7,7 @@ actor MonitorState {
     private var events: [AgentEvent]
     private var dedupeSeenAt: [String: Date] = [:]
     private var stallAlertedAgentIDs: Set<UUID> = []
-    private var subscribers: [Int32: IPCServer.ClientConnection] = [:]
+    private var subscribers: [UUID: IPCServer.ClientConnection] = [:]
 
     private let tmux: TmuxClient
     private let nowProvider: @Sendable () -> Date
@@ -19,7 +19,7 @@ actor MonitorState {
     ) {
         self.tmux = tmux
         self.nowProvider = nowProvider
-        self.config = AppConfig.load()
+        self.config = AppConfig.load().normalized()
         self.eventStore = EventStore(fileURL: AppConfig.eventsFile, maxLines: config.maxStoredEvents)
         self.agents = MonitorState.loadAgents()
 
@@ -91,11 +91,11 @@ actor MonitorState {
     func handle(_ message: IPCMessage, from connection: IPCServer.ClientConnection) async {
         switch message {
         case .subscribe:
-            subscribers[connection.fd] = connection
+            subscribers[connection.id] = connection
             do {
                 try connection.send(.snapshot(currentSnapshot()))
             } catch {
-                subscribers.removeValue(forKey: connection.fd)
+                subscribers.removeValue(forKey: connection.id)
                 SentinelLogger.ipc.warning("Failed to send snapshot: \(error.localizedDescription)")
             }
 
@@ -177,7 +177,7 @@ actor MonitorState {
             await broadcast(.deregister(agentId: agentId, exitCode: exitCode))
 
         case .configUpdate(let newConfig):
-            config = newConfig
+            config = newConfig.normalized()
             try? config.save()
             let activeAgentIDs = Set(agents.values.filter(\.status.isActive).map(\.id))
             events = EventPolicy.normalizeHistory(
@@ -208,6 +208,10 @@ actor MonitorState {
         case .snapshot:
             break
         }
+    }
+
+    func clientDisconnected(_ connection: IPCServer.ClientConnection) {
+        subscribers.removeValue(forKey: connection.id)
     }
 
     /// Periodic maintenance: expire stale active agents and emit silent structured events.
@@ -375,22 +379,23 @@ actor MonitorState {
 
     private func broadcast(_ message: IPCMessage) async {
         guard !subscribers.isEmpty else { return }
-        var dead: [Int32] = []
-        for (fd, conn) in subscribers {
+        var dead: [UUID] = []
+        for (subscriberId, conn) in subscribers {
             do {
                 try conn.send(message)
             } catch {
-                dead.append(fd)
+                dead.append(subscriberId)
             }
         }
-        for fd in dead {
-            subscribers.removeValue(forKey: fd)
+        for subscriberId in dead {
+            subscribers.removeValue(forKey: subscriberId)
         }
     }
 
     private func trimEventsIfNeeded() {
-        if events.count > config.maxStoredEvents {
-            events.removeFirst(events.count - config.maxStoredEvents)
+        let maxStoredEvents = max(config.maxStoredEvents, 1)
+        if events.count > maxStoredEvents {
+            events.removeFirst(events.count - maxStoredEvents)
         }
     }
 

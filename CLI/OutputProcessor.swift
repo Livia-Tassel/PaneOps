@@ -15,6 +15,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private let debugMode: Bool
     private let debugFile: FileHandle?
     private let suppressInteractiveUntilFirstInput: Bool
+    private var pendingUTF8Bytes = Data()
 
     // Rate limiting
     private let rateLimitLinesPerSec: Int
@@ -32,8 +33,6 @@ public final class OutputProcessor: @unchecked Sendable {
     private let maxLineBufferChars = 16_384
     private var recentLineSeenAt: [String: Date] = [:]
     private let repeatedLineSuppressionSeconds: TimeInterval = 1.2
-    private var lastBufferedCandidateKey = ""
-    private var lastBufferedCandidateAt = Date.distantPast
     private var hasObservedUserInput = false
 
     public init(
@@ -77,7 +76,16 @@ public final class OutputProcessor: @unchecked Sendable {
 
     /// Process a chunk of raw PTY output.
     public func processData(_ data: Data) {
-        guard let text = String(data: data, encoding: .utf8) else { return }
+        guard !data.isEmpty else { return }
+
+        let now = Date()
+        lastOutputTime = now
+        stallFired = false
+        resetStallTimer()
+
+        let (text, pendingBytes) = decodeUTF8Text(from: data)
+        pendingUTF8Bytes = pendingBytes
+        guard !text.isEmpty else { return }
         lineBuffer += text
         if lineBuffer.count > maxLineBufferChars {
             lineBuffer = String(lineBuffer.suffix(maxLineBufferChars))
@@ -86,11 +94,6 @@ public final class OutputProcessor: @unchecked Sendable {
         // Split on newlines, keep the last partial line in buffer
         var lines = lineBuffer.components(separatedBy: "\n")
         lineBuffer = lines.removeLast() // May be empty string if text ended with \n
-
-        let now = Date()
-        lastOutputTime = now
-        stallFired = false
-        resetStallTimer()
 
         // Rate limiting: if exceeding threshold, only process last line of burst
         lineCount += lines.count
@@ -114,6 +117,11 @@ public final class OutputProcessor: @unchecked Sendable {
 
     /// Flush any remaining buffered content (call when PTY closes).
     public func flush() {
+        if !pendingUTF8Bytes.isEmpty {
+            let fallback = String(decoding: pendingUTF8Bytes, as: UTF8.self)
+            lineBuffer += fallback
+            pendingUTF8Bytes.removeAll(keepingCapacity: false)
+        }
         if !lineBuffer.isEmpty {
             processLine(lineBuffer)
             lineBuffer = ""
@@ -129,13 +137,8 @@ public final class OutputProcessor: @unchecked Sendable {
     /// Let the processor know the user has typed into the PTY.
     /// This suppresses startup banner false positives for interactive events.
     public func noteUserInput(_ data: Data) {
-        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return }
-        for byte in data {
-            if byte >= 0x21 || byte >= 0x80 {
-                hasObservedUserInput = true
-                return
-            }
-        }
+        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput, !data.isEmpty else { return }
+        hasObservedUserInput = true
     }
 
     // MARK: - Private
@@ -219,16 +222,32 @@ public final class OutputProcessor: @unchecked Sendable {
         }
         if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
         if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
-
-        let now = Date()
-        let key = "\(match.rule.id.uuidString)|\(stableKeyFragment(from: stripped))"
-        if key == lastBufferedCandidateKey, now.timeIntervalSince(lastBufferedCandidateAt) < 1.5 {
-            return
-        }
-        lastBufferedCandidateKey = key
-        lastBufferedCandidateAt = now
+        if shouldSuppressRepeatedLine(stripped) { return }
 
         emitMatchedEvent(match, summary: stripped)
+    }
+
+    private func decodeUTF8Text(from data: Data) -> (String, Data) {
+        var combined = pendingUTF8Bytes
+        combined.append(data)
+
+        if let text = String(data: combined, encoding: .utf8) {
+            return (text, Data())
+        }
+
+        let maxTailBytes = min(3, combined.count)
+        for tailCount in 1...maxTailBytes {
+            let prefix = combined.dropLast(tailCount)
+            if let text = String(data: prefix, encoding: .utf8) {
+                return (text, Data(combined.suffix(tailCount)))
+            }
+        }
+
+        if combined.count <= 4 {
+            return ("", combined)
+        }
+
+        return (String(decoding: combined, as: UTF8.self), Data())
     }
 
     private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {

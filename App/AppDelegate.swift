@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch message {
         case .snapshot(let snapshot):
             agentRegistry.applySnapshot(snapshot)
+            syncOverlayFromRegistry()
 
         case .register(let agent):
             agentRegistry.register(agent)
@@ -64,9 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .configUpdate(let config):
             agentRegistry.config = config
+            syncOverlayFromRegistry()
 
         case .ack(let messageId):
             agentRegistry.acknowledgeEvent(id: messageId)
+            notificationManager?.dismiss(eventId: messageId)
 
         case .maintenance:
             break
@@ -74,5 +77,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .subscribe:
             break
         }
+    }
+
+    private func syncOverlayFromRegistry() {
+        guard let notificationManager else { return }
+        guard agentRegistry.config.notificationsEnabled else {
+            notificationManager.replaceVisibleEvents(with: [])
+            return
+        }
+
+        let overlayEvents = agentRegistry.recentEvents.filter { event in
+            guard event.shouldNotify else { return false }
+            return EventPolicy.isActionable(
+                event,
+                now: Date(),
+                actionableWindowSeconds: agentRegistry.config.actionableEventWindowSeconds,
+                activeAgentIDs: agentRegistry.activeAgentIDs
+            )
+        }
+        notificationManager.replaceVisibleEvents(with: overlayEvents)
     }
 }

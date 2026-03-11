@@ -1,14 +1,17 @@
-.PHONY: build build-cli build-app build-monitor release dist pkg install install-cli install-monitor install-app up down status logs test clean format help
+.PHONY: sync-version build build-cli build-app build-monitor release dist pkg install install-cli install-monitor install-app up down status logs test clean format help
 
 BUILD_DIR := .build-agent-sentinel
 CLI_NAME := agent-sentinel
 MONITOR_NAME := sentinel-monitor
 APP_BINARY := SentinelApp
+APP_BUNDLE_NAME := Agent Sentinel.app
 APP_LAUNCH_NAME := sentinel-app
 VERSION_FILE := VERSION
 VERSION := $(shell tr -d '[:space:]' < $(VERSION_FILE) 2>/dev/null || echo 0.1.0)
 PREFIX ?= /usr/local
 INSTALL_DIR ?= $(PREFIX)/bin
+APP_INSTALL_DIR ?= /Applications
+APP_INSTALL_PATH := $(APP_INSTALL_DIR)/$(APP_BUNDLE_NAME)
 INSTALL_TOOL := /usr/bin/install
 LOG_DIR := $(HOME)/.agent-sentinel/logs
 MONITOR_LOG := $(LOG_DIR)/monitor.log
@@ -19,24 +22,27 @@ MONITOR_STARTUP_SLEEP := 0.2
 SWIFT_BUILD := swift build --build-path $(BUILD_DIR)
 SWIFT_TEST := swift test --build-path $(BUILD_DIR)
 
+sync-version:
+	@bash ./scripts/sync_version.sh
+
 # Build all targets
-build:
+build: sync-version
 	$(SWIFT_BUILD)
 
 # Build CLI only
-build-cli:
+build-cli: sync-version
 	$(SWIFT_BUILD) --target SentinelCLI
 
 # Build App only
-build-app:
+build-app: sync-version
 	$(SWIFT_BUILD) --target SentinelApp
 
 # Build monitor daemon only
-build-monitor:
+build-monitor: sync-version
 	$(SWIFT_BUILD) --target SentinelMonitor
 
 # Release build
-release:
+release: sync-version
 	@if [ "$$(id -u)" -eq 0 ] && [ -n "$$SUDO_USER" ] && [ "$$SUDO_USER" != "root" ]; then \
 		echo "Building as $$SUDO_USER to avoid root-owned .build artifacts"; \
 		sudo -u "$$SUDO_USER" HOME="$$(eval echo ~$$SUDO_USER)" swift build --build-path $(BUILD_DIR) -c release; \
@@ -52,7 +58,7 @@ dist:
 pkg:
 	@BUILD_DIR=$(BUILD_DIR) ./scripts/build_pkg.sh
 
-# Install all binaries (CLI + monitor + app launcher)
+# Install all binaries (CLI + monitor + app bundle + launcher)
 install: release install-cli install-monitor install-app
 
 # Install CLI to /usr/local/bin
@@ -75,14 +81,24 @@ install-monitor:
 	$(INSTALL_TOOL) -m 0755 $(BUILD_DIR)/release/$(MONITOR_NAME) $(INSTALL_DIR)/$(MONITOR_NAME)
 	@echo "Installed $(MONITOR_NAME) to $(INSTALL_DIR)"
 
-# Install menu bar app binary launcher to /usr/local/bin/sentinel-app
+# Install menu bar app bundle under /Applications and launcher under /usr/local/bin/sentinel-app
 install-app:
+	@BUILD_DIR=$(BUILD_DIR) ./scripts/build_release_bundle.sh >/dev/null
+	@mkdir -p "$(APP_INSTALL_DIR)"
 	@mkdir -p $(INSTALL_DIR)
 	@if [ ! -w "$(INSTALL_DIR)" ]; then \
 		echo "No write permission to $(INSTALL_DIR). Please run: sudo make install"; \
 		exit 1; \
 	fi
-	$(INSTALL_TOOL) -m 0755 $(BUILD_DIR)/release/$(APP_BINARY) $(INSTALL_DIR)/$(APP_LAUNCH_NAME)
+	@if [ ! -w "$(APP_INSTALL_DIR)" ]; then \
+		echo "No write permission to $(APP_INSTALL_DIR). Please run: sudo make install"; \
+		exit 1; \
+	fi
+	@rm -rf "$(APP_INSTALL_PATH)"
+	@cp -R "dist/AgentSentinel-$(VERSION)-macOS/$(APP_BUNDLE_NAME)" "$(APP_INSTALL_PATH)"
+	@printf '%s\n' '#!/bin/sh' 'exec /usr/bin/open "$(APP_INSTALL_PATH)"' > "$(INSTALL_DIR)/$(APP_LAUNCH_NAME)"
+	@chmod 0755 "$(INSTALL_DIR)/$(APP_LAUNCH_NAME)"
+	@echo "Installed $(APP_BUNDLE_NAME) to $(APP_INSTALL_DIR)"
 	@echo "Installed $(APP_LAUNCH_NAME) to $(INSTALL_DIR)"
 
 # Start monitor + app in background
@@ -166,7 +182,7 @@ logs:
 	@echo "== ipc (os.Logger, last 5m) ==" && log show --style compact --last 5m --predicate 'subsystem == "com.paneops.agent-sentinel" && category == "ipc"' 2>/dev/null | tail -n 40 || true
 
 # Run tests
-test:
+test: sync-version
 	$(SWIFT_TEST)
 
 # Clean build artifacts

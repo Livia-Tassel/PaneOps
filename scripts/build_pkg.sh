@@ -16,6 +16,8 @@ if [[ -z "${VERSION}" ]]; then
   exit 1
 fi
 
+INSTALLER_SIGNING_IDENTITY="${INSTALLER_SIGNING_IDENTITY:-${SIGNING_IDENTITY:-}}"
+
 "${ROOT_DIR}/scripts/build_release_bundle.sh"
 
 DIST_DIR="${ROOT_DIR}/dist"
@@ -34,20 +36,20 @@ cp "${RELEASE_DIR}/bin/sentinel-monitor" "${PKG_ROOT}/usr/local/bin/sentinel-mon
 
 cat > "${PKG_ROOT}/usr/local/bin/sentinel-app" <<'EOF'
 #!/bin/sh
-exec "/Applications/Agent Sentinel.app/Contents/MacOS/SentinelApp" "$@"
+exec /usr/bin/open "/Applications/Agent Sentinel.app"
 EOF
 chmod 0755 "${PKG_ROOT}/usr/local/bin/sentinel-app"
 
 echo "==> Building installer package"
 rm -f "${PKG_PATH}"
 
-if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+if [[ -n "${INSTALLER_SIGNING_IDENTITY}" ]]; then
   pkgbuild \
     --root "${PKG_ROOT}" \
     --identifier "com.paneops.agent-sentinel" \
     --version "${VERSION}" \
     --install-location "/" \
-    --sign "${SIGNING_IDENTITY}" \
+    --sign "${INSTALLER_SIGNING_IDENTITY}" \
     "${PKG_PATH}"
 else
   pkgbuild \
@@ -60,6 +62,9 @@ fi
 
 echo "Installer ready:"
 echo "  ${PKG_PATH}"
-if [[ -z "${SIGNING_IDENTITY:-}" ]]; then
-  echo "Note: package is unsigned. Set SIGNING_IDENTITY to sign for distribution."
+if [[ -z "${INSTALLER_SIGNING_IDENTITY}" ]]; then
+  echo "Note: package is unsigned. Set INSTALLER_SIGNING_IDENTITY to sign the installer."
+fi
+if [[ -n "${INSTALLER_SIGNING_IDENTITY}" && -z "${APP_SIGNING_IDENTITY:-}" ]]; then
+  echo "Warning: installer is signed, but embedded app/binaries are unsigned. Set APP_SIGNING_IDENTITY for a fully signed bundle."
 fi

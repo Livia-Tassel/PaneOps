@@ -4,7 +4,9 @@ import Foundation
 public final class IPCClient: @unchecked Sendable {
     private let socketPath: String
     private var fileDescriptor: Int32
+    private var receiveBuffer = Data()
     private let sendLock = NSLock()
+    private let receiveLock = NSLock()
     private let closeLock = NSLock()
 
     public init(socketPath: String = AppConfig.socketPath) throws {
@@ -40,6 +42,14 @@ public final class IPCClient: @unchecked Sendable {
             close(fd)
             throw IPCError.connectionFailed(errno)
         }
+
+        try Self.configureSocket(fd)
+    }
+
+    init(fileDescriptor: Int32) throws {
+        self.socketPath = ""
+        self.fileDescriptor = fileDescriptor
+        try Self.configureSocket(fileDescriptor)
     }
 
     deinit {
@@ -52,16 +62,27 @@ public final class IPCClient: @unchecked Sendable {
         sendLock.lock()
         defer { sendLock.unlock() }
 
+        let fd = currentFileDescriptor()
+        guard fd >= 0 else {
+            throw IPCError.connectionClosed
+        }
+
         try frame.withUnsafeBytes { buffer in
             var totalSent = 0
             while totalSent < buffer.count {
                 let sent = Darwin.send(
-                    fileDescriptor,
+                    fd,
                     buffer.baseAddress!.advanced(by: totalSent),
                     buffer.count - totalSent,
                     0
                 )
+                if sent < 0, errno == EINTR {
+                    continue
+                }
                 guard sent > 0 else {
+                    if errno == EPIPE || errno == ECONNRESET {
+                        throw IPCError.connectionClosed
+                    }
                     throw IPCError.sendFailed(errno)
                 }
                 totalSent += sent
@@ -71,21 +92,32 @@ public final class IPCClient: @unchecked Sendable {
 
     /// Receive a single message from the server.
     public func receive() throws -> IPCMessage {
-        var buffer = Data()
+        receiveLock.lock()
+        defer { receiveLock.unlock() }
+
         let chunkSize = 4096
         let chunk = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 1)
         defer { chunk.deallocate() }
 
         while true {
-            if let (message, _) = try IPCFraming.decode(from: buffer) {
+            if let (message, consumed) = try IPCFraming.decode(from: receiveBuffer) {
+                receiveBuffer.removeFirst(consumed)
                 return message
             }
 
-            let bytesRead = recv(fileDescriptor, chunk, chunkSize, 0)
+            let fd = currentFileDescriptor()
+            guard fd >= 0 else {
+                throw IPCError.connectionClosed
+            }
+
+            let bytesRead = recv(fd, chunk, chunkSize, 0)
+            if bytesRead < 0, errno == EINTR {
+                continue
+            }
             guard bytesRead > 0 else {
                 throw IPCError.connectionClosed
             }
-            buffer.append(chunk.assumingMemoryBound(to: UInt8.self), count: bytesRead)
+            receiveBuffer.append(chunk.assumingMemoryBound(to: UInt8.self), count: bytesRead)
         }
     }
 
@@ -97,10 +129,31 @@ public final class IPCClient: @unchecked Sendable {
             fileDescriptor = -1
         }
     }
+
+    private func currentFileDescriptor() -> Int32 {
+        closeLock.lock()
+        defer { closeLock.unlock() }
+        return fileDescriptor
+    }
+
+    private static func configureSocket(_ fd: Int32) throws {
+        var noSigPipe: Int32 = 1
+        let result = setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &noSigPipe,
+            socklen_t(MemoryLayout.size(ofValue: noSigPipe))
+        )
+        guard result == 0 else {
+            throw IPCError.socketConfigurationFailed(errno)
+        }
+    }
 }
 
 public enum IPCError: Error, Sendable {
     case socketCreationFailed(Int32)
+    case socketConfigurationFailed(Int32)
     case pathTooLong
     case connectionFailed(Int32)
     case sendFailed(Int32)

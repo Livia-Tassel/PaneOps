@@ -6,14 +6,17 @@ public final class IPCServer: @unchecked Sendable {
     private var listenFD: Int32 = -1
     private var isRunning = false
     private let handler: @Sendable (IPCMessage, ClientConnection) -> Void
+    private let disconnectHandler: @Sendable (ClientConnection) -> Void
 
     /// A connected client's file descriptor wrapper.
     public final class ClientConnection: @unchecked Sendable {
+        public let id = UUID()
         public let fd: Int32
         private let sendLock = NSLock()
 
         init(fd: Int32) {
             self.fd = fd
+            Self.configureSocket(fd)
         }
 
         public func send(_ message: IPCMessage) throws {
@@ -26,7 +29,15 @@ public final class IPCServer: @unchecked Sendable {
                 while totalSent < buffer.count {
                     let sent = Darwin.send(fd, buffer.baseAddress!.advanced(by: totalSent),
                                            buffer.count - totalSent, 0)
-                    guard sent > 0 else { throw IPCError.sendFailed(errno) }
+                    if sent < 0, errno == EINTR {
+                        continue
+                    }
+                    guard sent > 0 else {
+                        if errno == EPIPE || errno == ECONNRESET {
+                            throw IPCError.connectionClosed
+                        }
+                        throw IPCError.sendFailed(errno)
+                    }
                     totalSent += sent
                 }
             }
@@ -35,12 +46,27 @@ public final class IPCServer: @unchecked Sendable {
         func close() {
             Darwin.close(fd)
         }
+
+        private static func configureSocket(_ fd: Int32) {
+            var noSigPipe: Int32 = 1
+            _ = setsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSigPipe,
+                socklen_t(MemoryLayout.size(ofValue: noSigPipe))
+            )
+        }
     }
 
-    public init(socketPath: String = AppConfig.socketPath,
-                handler: @escaping @Sendable (IPCMessage, ClientConnection) -> Void) {
+    public init(
+        socketPath: String = AppConfig.socketPath,
+        handler: @escaping @Sendable (IPCMessage, ClientConnection) -> Void,
+        disconnectHandler: @escaping @Sendable (ClientConnection) -> Void = { _ in }
+    ) {
         self.socketPath = socketPath
         self.handler = handler
+        self.disconnectHandler = disconnectHandler
     }
 
     /// Start listening. Call from a background task.
@@ -93,13 +119,14 @@ public final class IPCServer: @unchecked Sendable {
             let clientFD = accept(fd, nil, nil)
             guard clientFD >= 0 else {
                 if !isRunning { break }
+                if errno == EINTR { continue }
                 SentinelLogger.ipc.warning("Accept failed: \(errno)")
                 continue
             }
 
             let conn = ClientConnection(fd: clientFD)
-            Task.detached { [handler] in
-                await self.handleClient(conn, handler: handler)
+            Task.detached { [handler, disconnectHandler] in
+                await self.handleClient(conn, handler: handler, disconnectHandler: disconnectHandler)
             }
         }
     }
@@ -115,18 +142,25 @@ public final class IPCServer: @unchecked Sendable {
         SentinelLogger.ipc.info("IPC server stopped")
     }
 
-    private func handleClient(_ conn: ClientConnection,
-                              handler: @escaping @Sendable (IPCMessage, ClientConnection) -> Void) async {
+    private func handleClient(
+        _ conn: ClientConnection,
+        handler: @escaping @Sendable (IPCMessage, ClientConnection) -> Void,
+        disconnectHandler: @escaping @Sendable (ClientConnection) -> Void
+    ) async {
         var buffer = Data()
         let chunkSize = 4096
         let chunk = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 1)
         defer {
             chunk.deallocate()
+            disconnectHandler(conn)
             conn.close()
         }
 
         while true {
             let bytesRead = recv(conn.fd, chunk, chunkSize, 0)
+            if bytesRead < 0, errno == EINTR {
+                continue
+            }
             guard bytesRead > 0 else { break }
             buffer.append(chunk.assumingMemoryBound(to: UInt8.self), count: bytesRead)
 

@@ -3,16 +3,24 @@ import SentinelShared
 
 enum MonitorBootstrap {
     static func ensureRunning() {
-        if let client = try? IPCClient() {
-            client.closeConnection()
+        if waitForMonitor(retries: 6, retryDelayMicros: 250_000) {
             return
         }
 
         let candidates = monitorExecutableCandidates()
         for candidate in candidates {
-            if launch(executable: candidate.0, arguments: candidate.1) {
-                SentinelLogger.monitor.info("Launched monitor via \(candidate.0)")
-                return
+            switch launch(executable: candidate.0, arguments: candidate.1) {
+            case .notStarted:
+                continue
+            case .started(let process):
+                if waitForMonitor(retries: 20, retryDelayMicros: 250_000) {
+                    SentinelLogger.monitor.info("Launched monitor via \(candidate.0)")
+                    return
+                }
+                if process.isRunning {
+                    SentinelLogger.monitor.warning("Monitor launched via \(candidate.0) but did not become ready in time")
+                    return
+                }
             }
         }
 
@@ -33,7 +41,20 @@ enum MonitorBootstrap {
         return list
     }
 
-    private static func launch(executable: String, arguments: [String]) -> Bool {
+    private static func waitForMonitor(retries: Int, retryDelayMicros: useconds_t) -> Bool {
+        for attempt in 0..<retries {
+            if let client = try? IPCClient() {
+                client.closeConnection()
+                return true
+            }
+            if attempt < retries - 1 {
+                usleep(retryDelayMicros)
+            }
+        }
+        return false
+    }
+
+    private static func launch(executable: String, arguments: [String]) -> LaunchResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -41,13 +62,14 @@ enum MonitorBootstrap {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            usleep(200_000)
-            if process.isRunning || process.terminationStatus == 0 {
-                return true
-            }
-            return false
+            return .started(process)
         } catch {
-            return false
+            return .notStarted
         }
     }
+}
+
+private enum LaunchResult {
+    case started(Process)
+    case notStarted
 }

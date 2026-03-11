@@ -10,9 +10,8 @@
 ## Useful Commands
 
 ```bash
-swift build
-swift test
 make build
+make test
 make build-monitor
 make build-app
 ```
@@ -22,19 +21,19 @@ make build-app
 Terminal 1:
 
 ```bash
-.build/debug/sentinel-monitor
+.build-agent-sentinel/debug/sentinel-monitor
 ```
 
 Terminal 2:
 
 ```bash
-.build/debug/SentinelApp
+.build-agent-sentinel/debug/SentinelApp
 ```
 
 Terminal 3 (inside tmux pane):
 
 ```bash
-.build/debug/agent-sentinel run --agent claude --label auth-refactor -- claude
+.build-agent-sentinel/debug/agent-sentinel run --agent claude --label auth-refactor -- claude
 ```
 
 ## Config and State

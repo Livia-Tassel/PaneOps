@@ -21,8 +21,13 @@ struct SettingsView: View {
         }
         .frame(width: 480, height: 400)
         .onChange(of: config) { _, newValue in
-            try? newValue.save()
-            pushConfigToMonitor(newValue)
+            let normalized = newValue.normalized()
+            guard normalized == newValue else {
+                config = normalized
+                return
+            }
+            try? normalized.save()
+            pushConfigToMonitor(normalized)
         }
         .sheet(isPresented: $showingRuleEditor) {
             RuleEditorView(rule: editingRule) { savedRule in

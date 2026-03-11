@@ -6,7 +6,8 @@ import SentinelShared
 @MainActor
 enum JumpController {
     /// Jump to a specific agent's pane.
-    static func jump(to agent: AgentInstance) {
+    @discardableResult
+    static func jump(to agent: AgentInstance) -> Bool {
         jumpToPane(
             paneId: agent.paneId,
             windowId: agent.windowId,
@@ -15,8 +16,9 @@ enum JumpController {
     }
 
     /// Jump to a pane by ID.
-    static func jumpToPane(paneId: String, windowId: String = "", sessionName: String = "") {
-        guard !paneId.isEmpty else { return }
+    @discardableResult
+    static func jumpToPane(paneId: String, windowId: String = "", sessionName: String = "") -> Bool {
+        guard !paneId.isEmpty else { return false }
 
         do {
             try JumpService().jump(
@@ -26,6 +28,7 @@ enum JumpController {
                     sessionName: sessionName
                 )
             )
+            return true
         } catch {
             SentinelLogger.ui.warning("Jump failed for pane \(paneId): \(error.localizedDescription)")
             let message: String
@@ -38,6 +41,7 @@ enum JumpController {
                 title: "Jump Failed",
                 message: message
             )
+            return false
         }
     }
 

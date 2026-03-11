@@ -49,7 +49,12 @@ One-command install (recommended):
 sudo make install
 ```
 
-`make install` is root-safe: when invoked with `sudo`, it builds as the original user to avoid root-owned `.build` artifacts.
+`make install` is root-safe: when invoked with `sudo`, it builds as the original user to avoid root-owned `.build` artifacts. It installs:
+
+- `/Applications/Agent Sentinel.app`
+- `/usr/local/bin/agent-sentinel`
+- `/usr/local/bin/sentinel-monitor`
+- `/usr/local/bin/sentinel-app` as a launcher for the installed app bundle
 
 ## Packaging for GitHub Releases
 
@@ -79,8 +84,12 @@ Output:
 Optional signing:
 
 ```bash
-SIGNING_IDENTITY="Developer ID Installer: Your Name (TEAMID)" make pkg
+APP_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+INSTALLER_SIGNING_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
+make pkg
 ```
+
+`make pkg` can sign the embedded app and binaries when `APP_SIGNING_IDENTITY` is set, and the installer package when `INSTALLER_SIGNING_IDENTITY` is set. Notarization is not automated in this repo.
 
 ## Run (Development)
 
@@ -169,16 +178,18 @@ swift test
 
 Current tests cover:
 
+- config normalization and versioned runtime metadata
+- IPC client multi-frame receive and broken-pipe handling
 - IPC framing (including subscribe/snapshot)
 - Rule engine matching + cooldown
 - ANSI stripping
-- Output processor line buffering and dedupe
+- Output processor line buffering, UTF-8 boundary handling, and dedupe
 - Jump service command path and failure handling
 
 ## Troubleshooting
 
 - `Could not connect to sentinel-monitor`:
-  - Start daemon manually: `.build/debug/sentinel-monitor`
+  - Start daemon manually: `.build-agent-sentinel/debug/sentinel-monitor`
   - Check socket: `ls -l ~/.agent-sentinel/monitor.sock`
 - Jump failed / pane not found:
   - Pane may have exited; verify with `tmux list-panes -a`

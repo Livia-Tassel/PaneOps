@@ -84,13 +84,15 @@ struct EventRowView: View {
 
             if jumpAvailability.isAvailable {
                 Button {
-                    JumpController.jumpToPane(
+                    let jumped = JumpController.jumpToPane(
                         paneId: event.paneId,
                         windowId: event.windowId,
                         sessionName: event.sessionName
                     )
-                    registry.acknowledgeEvent(id: event.id)
-                    ipcService.send(.ack(messageId: event.id))
+                    if jumped {
+                        registry.acknowledgeEvent(id: event.id)
+                        ipcService.send(.ack(messageId: event.id))
+                    }
                 } label: {
                     Image(systemName: "arrow.right.circle")
                         .font(.caption)

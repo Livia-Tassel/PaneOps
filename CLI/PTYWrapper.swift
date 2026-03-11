@@ -6,7 +6,15 @@ public final class PTYWrapper: @unchecked Sendable {
     public let masterFD: Int32
     public let childPID: pid_t
     private var isRunning = true
+    private var masterFDClosed = false
     private var originalTermios: termios?
+
+    deinit {
+        isRunning = false
+        restoreTerminal()
+        Self.teardownWinchHandler(masterFD: masterFD)
+        closeMasterFD()
+    }
 
     /// Create a PTY wrapper that forks and execs the given command.
     /// Copies the current terminal's size and settings to the child PTY.
@@ -136,7 +144,8 @@ public final class PTYWrapper: @unchecked Sendable {
         var status: Int32 = 0
         waitpid(childPID, &status, 0)
         isRunning = false
-        close(masterFD)
+        Self.teardownWinchHandler(masterFD: masterFD)
+        closeMasterFD()
 
         if status & 0x7f == 0 {
             return (status >> 8) & 0xff
@@ -147,15 +156,13 @@ public final class PTYWrapper: @unchecked Sendable {
 
     /// Write data to the PTY (for passing input to the child).
     public func write(_ data: Data) {
-        data.withUnsafeBytes { buffer in
-            _ = Darwin.write(masterFD, buffer.baseAddress!, buffer.count)
-        }
+        try? Self.writeAll(to: masterFD, data: data)
     }
 
     // MARK: - SIGWINCH
 
     // Global storage for the master FD so the signal handler can access it
-    private static var activeMasterFD: Int32 = -1
+    nonisolated(unsafe) private static var activeMasterFD: Int32 = -1
 
     private static func setupWinchHandler(masterFD: Int32) {
         Self.activeMasterFD = masterFD
@@ -171,6 +178,45 @@ public final class PTYWrapper: @unchecked Sendable {
         sigemptyset(&action.sa_mask)
         action.sa_flags = 0
         sigaction(SIGWINCH, &action, nil)
+    }
+
+    private static func teardownWinchHandler(masterFD: Int32) {
+        if Self.activeMasterFD == masterFD {
+            Self.activeMasterFD = -1
+        }
+    }
+
+    static func writeAll(
+        to fileDescriptor: Int32,
+        data: Data,
+        writer: (Int32, UnsafeRawPointer, Int) -> Int = { fd, buffer, count in
+            Darwin.write(fd, buffer, count)
+        }
+    ) throws {
+        var totalWritten = 0
+        try data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            while totalWritten < buffer.count {
+                let written = writer(
+                    fileDescriptor,
+                    baseAddress.advanced(by: totalWritten),
+                    buffer.count - totalWritten
+                )
+                if written < 0, errno == EINTR {
+                    continue
+                }
+                guard written > 0 else {
+                    throw POSIXError(.EIO)
+                }
+                totalWritten += written
+            }
+        }
+    }
+
+    private func closeMasterFD() {
+        guard !masterFDClosed else { return }
+        close(masterFD)
+        masterFDClosed = true
     }
 }
 

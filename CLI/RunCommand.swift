@@ -96,6 +96,9 @@ struct RunCommand: ParsableCommand {
 
         // Put terminal into raw mode so all keystrokes pass through
         _ = pty.enableRawMode()
+        defer {
+            pty.restoreTerminal()
+        }
 
         // Read output and pass to terminal + processor
         let outputTask = Task {
@@ -131,9 +134,6 @@ struct RunCommand: ParsableCommand {
         // Wait for child to exit
         let exitCode = pty.waitForExit()
 
-        // Restore terminal before any output
-        pty.restoreTerminal()
-
         outputTask.cancel()
         inputTask.cancel()
         heartbeatTask.cancel()
@@ -142,17 +142,17 @@ struct RunCommand: ParsableCommand {
         try? ipcClient?.send(.deregister(agentId: agentId, exitCode: exitCode))
 
         // Forward exit code
-        Darwin.exit(exitCode)
+        throw ExitCode(exitCode)
     }
 
     private func connectToMonitorAndRegister(_ instance: AgentInstance) -> IPCClient? {
-        if let client = tryConnectMonitor() {
+        if let client = tryConnectMonitor(retries: 6, retryDelayMillis: 250) {
             try? client.send(.register(instance))
             return client
         }
 
         launchMonitorIfNeeded()
-        if let client = tryConnectMonitor(retries: 6, retryDelayMillis: 250) {
+        if let client = tryConnectMonitor(retries: 12, retryDelayMillis: 250) {
             try? client.send(.register(instance))
             return client
         }

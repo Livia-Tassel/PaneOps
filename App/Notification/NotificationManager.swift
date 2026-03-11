@@ -38,6 +38,28 @@ final class NotificationManager: @unchecked Sendable {
         refreshPanel()
     }
 
+    func replaceVisibleEvents(with incomingEvents: [AgentEvent]) {
+        assert(Thread.isMainThread, "NotificationManager.replaceVisibleEvents must be called on main thread")
+
+        for timer in timers.values {
+            timer.invalidate()
+        }
+        timers.removeAll()
+
+        events = incomingEvents.filter(\.shouldNotify)
+        enforceLimits()
+        if events.isEmpty {
+            refreshPanel()
+            return
+        }
+
+        ensurePanel()
+        refreshPanel()
+        for event in events {
+            scheduleDismissTimer(for: event)
+        }
+    }
+
     func acknowledgeAndDismiss(eventId: UUID) {
         onAcknowledge(eventId)
         dismiss(eventId: eventId)
@@ -100,12 +122,14 @@ final class NotificationManager: @unchecked Sendable {
             },
             onJump: { [weak self] event in
                 DispatchQueue.main.async {
-                    JumpController.jumpToPane(
+                    let jumped = JumpController.jumpToPane(
                         paneId: event.paneId,
                         windowId: event.windowId,
                         sessionName: event.sessionName
                     )
-                    self?.acknowledgeAndDismiss(eventId: event.id)
+                    if jumped {
+                        self?.acknowledgeAndDismiss(eventId: event.id)
+                    }
                 }
             }
         )

@@ -8,6 +8,8 @@ This document defines the packaging flow used for GitHub releases.
 - Release scripts propagate this value to:
   - bundle name
   - tarball/pkg artifact names
+  - CLI `--version`
+  - monitor `--version`
   - app bundle `CFBundleShortVersionString` and `CFBundleVersion`
 
 ## Build Artifacts
@@ -26,6 +28,7 @@ Produces:
 The bundle contains:
 
 - `bin/agent-sentinel`
+- `bin/sentinel-app`
 - `bin/sentinel-monitor`
 - `Agent Sentinel.app` (includes `SentinelApp` + bundled `sentinel-monitor`)
 
@@ -44,7 +47,7 @@ Installation layout:
 - `/Applications/Agent Sentinel.app`
 - `/usr/local/bin/agent-sentinel`
 - `/usr/local/bin/sentinel-monitor`
-- `/usr/local/bin/sentinel-app` (launcher to app binary)
+- `/usr/local/bin/sentinel-app` (launcher for the installed app bundle)
 
 ## Optional Signing
 
@@ -57,8 +60,16 @@ make pkg
 Signed package:
 
 ```bash
-SIGNING_IDENTITY="Developer ID Installer: Your Name (TEAMID)" make pkg
+APP_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+INSTALLER_SIGNING_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
+make pkg
 ```
+
+Notes:
+
+- `APP_SIGNING_IDENTITY` signs the app bundle and embedded binaries.
+- `INSTALLER_SIGNING_IDENTITY` signs the `.pkg`.
+- Notarization is not automated by this repository and must be done separately for distribution outside your own Mac.
 
 ## Recommended GitHub Release Uploads
 

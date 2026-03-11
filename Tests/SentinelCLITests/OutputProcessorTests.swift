@@ -163,6 +163,31 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.eventType, .permissionRequested)
     }
 
+    func testPreservesSplitUTF8PromptAcrossChunks() {
+        let expectation = XCTestExpectation(description: "Split UTF-8 prompt emits once")
+        let events = LockedBox<[AgentEvent]>([])
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "utf8",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        let promptData = "❯".data(using: .utf8)!
+        processor.processData(promptData.prefix(1))
+        processor.processData(promptData.suffix(promptData.count - 1))
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+    }
+
     func testDetectsPromptWithoutTrailingNewline() {
         let expectation = XCTestExpectation(description: "Prompt event emitted from buffered candidate")
         let receivedEvent = LockedBox<AgentEvent?>(nil)
@@ -183,6 +208,27 @@ final class OutputProcessorTests: XCTestCase {
 
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(receivedEvent.value?.eventType, .taskCompleted)
+    }
+
+    func testDoesNotDuplicateBufferedPromptWhenNewlineArrives() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "prompt-dedupe",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.processData("❯".data(using: .utf8)!)
+        processor.processData("\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
     }
 
     func testRateLimitDoesNotDropCriticalLines() {
@@ -255,6 +301,31 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertTrue(events.value.isEmpty)
 
         processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("❯\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.last?.eventType, .taskCompleted)
+    }
+
+    func testEnterOnlyInputUnlocksSuppressedInteractiveEvents() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "enter",
+            rules: rules,
+            stallTimeout: 999,
+            suppressInteractiveUntilFirstInput: true
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.processData("❯\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.noteUserInput("\n".data(using: .utf8)!)
         processor.processData("❯\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.1)
 
