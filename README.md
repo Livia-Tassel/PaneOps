@@ -51,6 +51,37 @@ sudo make install
 
 `make install` is root-safe: when invoked with `sudo`, it builds as the original user to avoid root-owned `.build` artifacts.
 
+## Packaging for GitHub Releases
+
+Release assets are generated from a single version source: [`VERSION`](VERSION).
+
+Build a distributable folder + tarball:
+
+```bash
+make dist
+```
+
+Output:
+
+- `dist/AgentSentinel-<version>-macOS/`
+- `dist/AgentSentinel-<version>-macOS.tar.gz`
+
+Build a macOS installer package:
+
+```bash
+make pkg
+```
+
+Output:
+
+- `dist/AgentSentinel-<version>.pkg`
+
+Optional signing:
+
+```bash
+SIGNING_IDENTITY="Developer ID Installer: Your Name (TEAMID)" make pkg
+```
+
 ## Run (Development)
 
 1. Start the monitor daemon:

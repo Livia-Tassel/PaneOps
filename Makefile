@@ -1,11 +1,14 @@
-.PHONY: build build-cli build-app build-monitor release install install-cli install-monitor install-app up down status logs test clean format help
+.PHONY: build build-cli build-app build-monitor release dist pkg install install-cli install-monitor install-app up down status logs test clean format help
 
 BUILD_DIR := .build-agent-sentinel
 CLI_NAME := agent-sentinel
 MONITOR_NAME := sentinel-monitor
 APP_BINARY := SentinelApp
 APP_LAUNCH_NAME := sentinel-app
-INSTALL_DIR := /usr/local/bin
+VERSION_FILE := VERSION
+VERSION := $(shell tr -d '[:space:]' < $(VERSION_FILE) 2>/dev/null || echo 0.1.0)
+PREFIX ?= /usr/local
+INSTALL_DIR ?= $(PREFIX)/bin
 INSTALL_TOOL := /usr/bin/install
 LOG_DIR := $(HOME)/.agent-sentinel/logs
 MONITOR_LOG := $(LOG_DIR)/monitor.log
@@ -40,6 +43,14 @@ release:
 	else \
 		$(SWIFT_BUILD) -c release; \
 	fi
+
+# Build release tarball for GitHub Releases
+dist:
+	@BUILD_DIR=$(BUILD_DIR) ./scripts/build_release_bundle.sh
+
+# Build macOS installer package (.pkg)
+pkg:
+	@BUILD_DIR=$(BUILD_DIR) ./scripts/build_pkg.sh
 
 # Install all binaries (CLI + monitor + app launcher)
 install: release install-cli install-monitor install-app
@@ -178,7 +189,9 @@ help:
 	@echo "  build-app  - Build App only"
 	@echo "  build-monitor - Build monitor daemon only"
 	@echo "  release    - Build all targets (release)"
-	@echo "  install    - Install CLI + monitor + app launcher to /usr/local/bin"
+	@echo "  dist       - Build release bundle + tar.gz under dist/"
+	@echo "  pkg        - Build unsigned macOS installer package under dist/"
+	@echo "  install    - Install CLI + monitor + app launcher to $(INSTALL_DIR)"
 	@echo "  up         - Start monitor + app in background"
 	@echo "  down       - Stop monitor + app"
 	@echo "  status     - Show monitor + app process status"
@@ -186,3 +199,5 @@ help:
 	@echo "  test       - Run all tests"
 	@echo "  clean      - Clean build artifacts"
 	@echo "  format     - Format code with swift-format"
+	@echo ""
+	@echo "Current version: $(VERSION)"
