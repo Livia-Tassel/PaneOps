@@ -136,4 +136,13 @@ final class RuleEngineTests: XCTestCase {
         let effective = RuleEngine.effectiveRules(config: config)
         XCTAssertFalse(effective.contains { $0.id == firstClaudeId })
     }
+
+    func testClaudePermissionRuleDoesNotMatchPermissionsHelpTip() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+        let line = "Tip: Use /permissions to pre-approve and pre-deny bash, edit, and MCP tools"
+
+        let match = engine.match(line: line, agentType: .claude, agentId: agentId)
+        XCTAssertTrue(match == nil || match?.rule.eventType != .permissionRequested)
+    }
 }
