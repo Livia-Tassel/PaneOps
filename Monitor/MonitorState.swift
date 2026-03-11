@@ -6,6 +6,7 @@ actor MonitorState {
     private var agents: [UUID: AgentInstance]
     private var events: [AgentEvent]
     private var dedupeSeenAt: [String: Date] = [:]
+    private var stallAlertedAgentIDs: Set<UUID> = []
     private var subscribers: [Int32: IPCServer.ClientConnection] = [:]
 
     private let tmux: TmuxClient
@@ -103,6 +104,7 @@ actor MonitorState {
             updated.lastActiveAt = nowProvider()
             updated.status = .running
             agents[agent.id] = updated
+            stallAlertedAgentIDs.remove(agent.id)
             saveAgents()
             await broadcast(.register(updated))
 
@@ -120,6 +122,7 @@ actor MonitorState {
             if accepted.eventType == .taskCompleted || !accepted.shouldNotify {
                 accepted.acknowledged = true
             }
+            updateStallAlertGate(for: accepted)
 
             apply(event: accepted)
             events.append(accepted)
@@ -162,6 +165,7 @@ actor MonitorState {
                 agents[agentId]?.status = (exitCode == 0) ? .completed : .errored
                 agents[agentId]?.lastActiveAt = now
             }
+            stallAlertedAgentIDs.remove(agentId)
             let ackedIds = acknowledgeEndedAgentEvents(agentId: agentId)
             saveAgents()
             if !ackedIds.isEmpty {
@@ -242,6 +246,12 @@ actor MonitorState {
     // MARK: - Event semantics
 
     private func shouldAccept(event: AgentEvent) -> Bool {
+        if event.eventType == .stalledOrWaiting,
+           event.matchedRule == "stall-detection",
+           stallAlertedAgentIDs.contains(event.agentId) {
+            return false
+        }
+
         let now = nowProvider()
         let dedupeKey = canonicalDedupeKey(for: event)
         let window: TimeInterval
@@ -260,6 +270,14 @@ actor MonitorState {
         }
         dedupeSeenAt[dedupeKey] = now
         return true
+    }
+
+    private func updateStallAlertGate(for event: AgentEvent) {
+        if event.eventType == .stalledOrWaiting, event.matchedRule == "stall-detection" {
+            stallAlertedAgentIDs.insert(event.agentId)
+            return
+        }
+        stallAlertedAgentIDs.remove(event.agentId)
     }
 
     private func canonicalDedupeKey(for event: AgentEvent) -> String {
