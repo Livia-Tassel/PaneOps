@@ -161,4 +161,16 @@ final class IPCFramingTests: XCTestCase {
         let (decoded2, _) = try XCTUnwrap(IPCFraming.decode(from: remaining))
         if case .ack = decoded2 {} else { XCTFail("Expected ack") }
     }
+
+    func testRejectsOversizedFrameLength() {
+        // Length prefix: 0x00400001 (4MB + 1)
+        var data = Data([0x00, 0x40, 0x00, 0x01])
+        data.append(Data(repeating: 0, count: 8))
+
+        XCTAssertThrowsError(try IPCFraming.decode(from: data)) { error in
+            guard case IPCError.decodingFailed = error else {
+                return XCTFail("Expected decodingFailed, got \(error)")
+            }
+        }
+    }
 }

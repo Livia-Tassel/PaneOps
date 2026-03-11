@@ -28,9 +28,15 @@ enum JumpController {
             )
         } catch {
             SentinelLogger.ui.warning("Jump failed for pane \(paneId): \(error.localizedDescription)")
+            let message: String
+            if let jumpError = error as? JumpError {
+                message = jumpError.localizedDescription
+            } else {
+                message = "Unable to jump to the target pane. Check tmux/iTerm2 availability and try again."
+            }
             showAlert(
                 title: "Jump Failed",
-                message: error.localizedDescription
+                message: message
             )
         }
     }

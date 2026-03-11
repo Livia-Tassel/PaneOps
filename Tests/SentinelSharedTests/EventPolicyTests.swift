@@ -88,4 +88,43 @@ final class EventPolicyTests: XCTestCase {
         let two = EventPolicy.canonicalSummary("No output for 240s — wait")
         XCTAssertEqual(one, two)
     }
+
+    func testInactiveAgentInputEventIsNotActionableWhenActiveSetProvided() {
+        let activeAgentId = UUID()
+        let inactiveAgentEvent = AgentEvent(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "inactive",
+            eventType: .inputRequested,
+            summary: "Need input",
+            matchedRule: "rule"
+        )
+
+        XCTAssertFalse(
+            EventPolicy.isActionable(
+                inactiveAgentEvent,
+                now: Date(),
+                actionableWindowSeconds: 3600,
+                activeAgentIDs: [activeAgentId]
+            )
+        )
+    }
+
+    func testLegacyClaudePromptReadyInputGetsAcknowledgedOnNormalize() {
+        let event = AgentEvent(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "task",
+            eventType: .inputRequested,
+            summary: "❯",
+            matchedRule: "Claude: Prompt ready (❯)"
+        )
+
+        let normalized = EventPolicy.normalizeHistory(
+            [event],
+            now: Date(),
+            actionableWindowSeconds: 3600
+        )
+        XCTAssertTrue(normalized[0].acknowledged)
+    }
 }

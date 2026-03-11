@@ -7,11 +7,16 @@ final class NotificationManager: @unchecked Sendable {
     private var events: [AgentEvent] = []
     private var timers: [UUID: Timer] = [:]
     private let configProvider: () -> AppConfig
+    private let onAcknowledge: (UUID) -> Void
     private let horizontalInset: CGFloat = 16
     private let verticalInset: CGFloat = 16
 
-    init(configProvider: @escaping () -> AppConfig) {
+    init(
+        configProvider: @escaping () -> AppConfig,
+        onAcknowledge: @escaping (UUID) -> Void = { _ in }
+    ) {
         self.configProvider = configProvider
+        self.onAcknowledge = onAcknowledge
     }
 
     /// Must be called on main thread.
@@ -33,8 +38,18 @@ final class NotificationManager: @unchecked Sendable {
         refreshPanel()
     }
 
+    func acknowledgeAndDismiss(eventId: UUID) {
+        onAcknowledge(eventId)
+        dismiss(eventId: eventId)
+    }
+
     private func upsert(event: AgentEvent) {
         if let index = events.firstIndex(where: { $0.dedupeKey == event.dedupeKey }) {
+            let oldId = events[index].id
+            if oldId != event.id {
+                timers[oldId]?.invalidate()
+                timers.removeValue(forKey: oldId)
+            }
             events[index] = event
         } else {
             events.insert(event, at: 0)
@@ -71,7 +86,7 @@ final class NotificationManager: @unchecked Sendable {
         panel = NotificationPanel(
             onDismiss: { [weak self] eventId in
                 DispatchQueue.main.async {
-                    self?.dismiss(eventId: eventId)
+                    self?.acknowledgeAndDismiss(eventId: eventId)
                 }
             },
             onJump: { [weak self] event in
@@ -81,7 +96,7 @@ final class NotificationManager: @unchecked Sendable {
                         windowId: event.windowId,
                         sessionName: event.sessionName
                     )
-                    self?.dismiss(eventId: event.id)
+                    self?.acknowledgeAndDismiss(eventId: event.id)
                 }
             }
         )

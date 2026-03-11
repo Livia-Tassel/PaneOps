@@ -24,7 +24,7 @@ final class JumpServiceTests: XCTestCase {
 
     func testJumpFailsWhenPaneMissing() {
         let runner = MockRunner { executable, arguments in
-            if executable == "/usr/bin/env", arguments.contains("display-message") {
+            if arguments.contains("display-message") {
                 return CommandResult(stdout: "", stderr: "pane not found", exitCode: 1)
             }
             return CommandResult(stdout: "", stderr: "", exitCode: 0)

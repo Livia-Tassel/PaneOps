@@ -22,6 +22,13 @@ struct AgentListView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 4) {
+                    Text("Label source: task label > window > cwd > pane")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 2)
+
                     if !registry.activeAgents.isEmpty {
                         ForEach(registry.activeAgents) { agent in
                             AgentRowView(agent: agent)

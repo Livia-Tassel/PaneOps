@@ -66,7 +66,10 @@ struct MenuBarContentView: View {
 
                 HStack {
                     Button("Acknowledge All") {
-                        registry.acknowledgeAll()
+                        let ids = registry.acknowledgeAllPendingEventIDs()
+                        for id in ids {
+                            ipcService.send(.ack(messageId: id))
+                        }
                     }
                     .buttonStyle(.plain)
                     .font(.caption)

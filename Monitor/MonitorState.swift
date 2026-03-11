@@ -20,16 +20,19 @@ actor MonitorState {
         self.nowProvider = nowProvider
         self.config = AppConfig.load()
         self.eventStore = EventStore(fileURL: AppConfig.eventsFile, maxLines: config.maxStoredEvents)
+        self.agents = MonitorState.loadAgents()
 
         let now = nowProvider()
+        let loadedEvents = eventStore.loadRecent(config.maxStoredEvents)
+        let startupActiveAgentIDs = Set(self.agents.values.filter(\.status.isActive).map(\.id))
         self.events = EventPolicy.normalizeHistory(
-            eventStore.loadRecent(config.maxStoredEvents),
+            loadedEvents,
             now: now,
-            actionableWindowSeconds: config.actionableEventWindowSeconds
+            actionableWindowSeconds: config.actionableEventWindowSeconds,
+            activeAgentIDs: startupActiveAgentIDs
         )
-        self.agents = MonitorState.loadAgents()
         var generated: [AgentEvent] = []
-        var changed = false
+        var changed = Self.hasAcknowledgementChanges(original: loadedEvents, normalized: self.events)
 
         for agent in self.agents.values {
             let paneExists: Bool? = agent.paneId.isEmpty ? nil : tmux.paneExists(agent.paneId)
@@ -61,11 +64,17 @@ actor MonitorState {
             changed = true
         }
 
+        let preNormalizedEvents = self.events
+        let activeAgentIDs = Set(self.agents.values.filter(\.status.isActive).map(\.id))
         self.events = EventPolicy.normalizeHistory(
-            self.events,
+            preNormalizedEvents,
             now: now,
-            actionableWindowSeconds: self.config.actionableEventWindowSeconds
+            actionableWindowSeconds: self.config.actionableEventWindowSeconds,
+            activeAgentIDs: activeAgentIDs
         )
+        if Self.hasAcknowledgementChanges(original: preNormalizedEvents, normalized: self.events) {
+            changed = true
+        }
 
         if self.events.count > self.config.maxStoredEvents {
             self.events.removeFirst(self.events.count - self.config.maxStoredEvents)
@@ -74,6 +83,7 @@ actor MonitorState {
 
         if changed {
             Self.persistAgents(agents)
+            try? eventStore.rewrite(self.events)
         }
     }
 
@@ -119,26 +129,71 @@ actor MonitorState {
             await broadcast(.event(accepted))
 
         case .deregister(let agentId, let exitCode):
+            let now = nowProvider()
+            if exitCode == 0, shouldEmitSyntheticCompletion(for: agentId, now: now), let agent = agents[agentId] {
+                var completionEvent = AgentEvent(
+                    agentId: agent.id,
+                    agentType: agent.agentType,
+                    displayLabel: agent.displayLabel,
+                    eventType: .taskCompleted,
+                    summary: "Task completed (process exited successfully)",
+                    matchedRule: "monitor-exit-success",
+                    priority: .normal,
+                    shouldNotify: true,
+                    dedupeKey: "\(agent.id.uuidString)|taskCompleted|exit-success",
+                    timestamp: now,
+                    paneId: agent.paneId,
+                    windowId: agent.windowId,
+                    sessionName: agent.sessionName,
+                    acknowledged: true
+                )
+
+                if shouldAccept(event: completionEvent) {
+                    completionEvent.acknowledged = true
+                    apply(event: completionEvent)
+                    events.append(completionEvent)
+                    trimEventsIfNeeded()
+                    try? eventStore.append(completionEvent)
+                    await broadcast(.event(completionEvent))
+                }
+            }
+
             if agents[agentId] != nil {
                 agents[agentId]?.status = (exitCode == 0) ? .completed : .errored
-                agents[agentId]?.lastActiveAt = nowProvider()
+                agents[agentId]?.lastActiveAt = now
             }
+            let ackedIds = acknowledgeEndedAgentEvents(agentId: agentId)
             saveAgents()
+            if !ackedIds.isEmpty {
+                persistEventsSnapshot()
+                for eventId in ackedIds {
+                    await broadcast(.ack(messageId: eventId))
+                }
+            }
             await broadcast(.deregister(agentId: agentId, exitCode: exitCode))
 
         case .configUpdate(let newConfig):
             config = newConfig
             try? config.save()
+            let activeAgentIDs = Set(agents.values.filter(\.status.isActive).map(\.id))
             events = EventPolicy.normalizeHistory(
                 events,
                 now: nowProvider(),
-                actionableWindowSeconds: config.actionableEventWindowSeconds
+                actionableWindowSeconds: config.actionableEventWindowSeconds,
+                activeAgentIDs: activeAgentIDs
             )
             trimEventsIfNeeded()
+            persistEventsSnapshot()
             saveAgents()
             await broadcast(.configUpdate(config))
 
-        case .snapshot, .ack:
+        case .ack(let messageId):
+            if acknowledgeEvent(id: messageId) {
+                persistEventsSnapshot()
+                await broadcast(.ack(messageId: messageId))
+            }
+
+        case .snapshot:
             break
         }
     }
@@ -147,6 +202,7 @@ actor MonitorState {
     func tickForStalledAgents() async {
         let now = nowProvider()
         var generated: [AgentEvent] = []
+        var ackedIds: [UUID] = []
         var stateChanged = false
 
         for agent in agents.values {
@@ -163,11 +219,17 @@ actor MonitorState {
                 generated.append(event)
                 try? eventStore.append(event)
             }
+            ackedIds.append(contentsOf: acknowledgeEndedAgentEvents(agentId: agent.id))
         }
 
-        if stateChanged {
+        if stateChanged || !ackedIds.isEmpty {
             trimEventsIfNeeded()
             saveAgents()
+            persistEventsSnapshot()
+        }
+
+        for eventId in ackedIds {
+            await broadcast(.ack(messageId: eventId))
         }
 
         for event in generated {
@@ -204,7 +266,7 @@ actor MonitorState {
         case .permissionRequested, .inputRequested:
             agents[event.agentId]?.status = .waiting
         case .taskCompleted:
-            agents[event.agentId]?.status = .completed
+            agents[event.agentId]?.status = .running
         case .errorDetected:
             agents[event.agentId]?.status = .errored
         case .stalledOrWaiting:
@@ -268,10 +330,12 @@ actor MonitorState {
 
     private func currentSnapshot() -> MonitorSnapshot {
         let sortedAgents = agents.values.sorted { $0.startedAt > $1.startedAt }
+        let activeAgentIDs = Set(sortedAgents.filter(\.status.isActive).map(\.id))
         let recentEvents = EventPolicy.normalizeHistory(
             Array(events.suffix(200)),
             now: nowProvider(),
-            actionableWindowSeconds: config.actionableEventWindowSeconds
+            actionableWindowSeconds: config.actionableEventWindowSeconds,
+            activeAgentIDs: activeAgentIDs
         )
         return MonitorSnapshot(agents: sortedAgents, events: recentEvents, config: config)
     }
@@ -302,6 +366,48 @@ actor MonitorState {
         dedupeSeenAt = dedupeSeenAt.filter { $0.value >= threshold }
     }
 
+    private func acknowledgeEvent(id: UUID) -> Bool {
+        guard let index = events.firstIndex(where: { $0.id == id }) else { return false }
+        guard !events[index].acknowledged else { return false }
+        events[index].acknowledged = true
+        return true
+    }
+
+    private func acknowledgeEndedAgentEvents(agentId: UUID) -> [UUID] {
+        var acked: [UUID] = []
+        for index in events.indices {
+            guard events[index].agentId == agentId else { continue }
+            guard !events[index].acknowledged else { continue }
+            switch events[index].eventType {
+            case .stalledOrWaiting, .inputRequested, .permissionRequested:
+                events[index].acknowledged = true
+                acked.append(events[index].id)
+            case .taskCompleted, .errorDetected:
+                break
+            }
+        }
+        return acked
+    }
+
+    private func persistEventsSnapshot() {
+        trimEventsIfNeeded()
+        try? eventStore.rewrite(events)
+    }
+
+    private func shouldEmitSyntheticCompletion(for agentId: UUID, now: Date) -> Bool {
+        let recentWindow: TimeInterval = 30
+        for event in events.reversed() {
+            if event.agentId != agentId { continue }
+            if now.timeIntervalSince(event.timestamp) > recentWindow {
+                break
+            }
+            if event.eventType == .taskCompleted {
+                return false
+            }
+        }
+        return true
+    }
+
     private func saveAgents() {
         Self.persistAgents(agents)
     }
@@ -321,5 +427,16 @@ actor MonitorState {
         decoder.dateDecodingStrategy = .iso8601
         guard let list = try? decoder.decode([AgentInstance].self, from: data) else { return [:] }
         return Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+    }
+
+    private static func hasAcknowledgementChanges(
+        original: [AgentEvent],
+        normalized: [AgentEvent]
+    ) -> Bool {
+        guard original.count == normalized.count else { return true }
+        for (lhs, rhs) in zip(original, normalized) where lhs.acknowledged != rhs.acknowledged {
+            return true
+        }
+        return false
     }
 }

@@ -3,9 +3,41 @@ import Foundation
 /// Client for interacting with tmux via shell commands.
 public struct TmuxClient: Sendable {
     private let runner: any CommandRunning
+    private let tmuxExecutable: String
 
-    public init(runner: any CommandRunning = LocalCommandRunner()) {
+    private static let paneFormat = "#{pane_id}\t#{window_id}\t#{session_name}\t#{session_id}\t#{window_name}\t#{pane_title}\t#{pane_pid}\t#{pane_current_path}\t#{pane_active}"
+    private static let preferredExecutables = [
+        "/opt/homebrew/bin/tmux",
+        "/usr/local/bin/tmux",
+        "/usr/bin/tmux",
+    ]
+
+    public init(runner: any CommandRunning = LocalCommandRunner(), tmuxExecutable: String? = nil) {
         self.runner = runner
+        self.tmuxExecutable = tmuxExecutable ?? Self.resolveTmuxExecutable(runner: runner)
+    }
+
+    static func resolveTmuxExecutable(
+        runner: any CommandRunning = LocalCommandRunner(),
+        executableChecker: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String {
+        for candidate in preferredExecutables where executableChecker(candidate) {
+            return candidate
+        }
+
+        let which = runner.run(executable: "/usr/bin/which", arguments: ["tmux"], environment: nil)
+        if which.exitCode == 0 {
+            let path = which.stdout
+                .split(separator: "\n")
+                .first
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+            if !path.isEmpty, executableChecker(path) {
+                return path
+            }
+        }
+
+        // Last resort when path lookup is unavailable.
+        return "/usr/bin/env"
     }
 
     /// Check if tmux is available.
@@ -16,16 +48,22 @@ public struct TmuxClient: Sendable {
 
     /// Get current pane info (from inside a tmux session).
     public func currentPane() -> PaneInfo? {
-        let format = "#{pane_id}\t#{window_id}\t#{session_name}\t#{session_id}\t#{window_name}\t#{pane_title}\t#{pane_pid}\t#{pane_current_path}\t#{pane_active}"
-        let result = runTmux(["display-message", "-p", format])
+        let result = runTmux(["display-message", "-p", Self.paneFormat])
+        guard result.exitCode == 0 else { return nil }
+        return parsePaneLine(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Get pane info for a specific pane id.
+    public func paneInfo(for paneId: String) -> PaneInfo? {
+        guard !paneId.isEmpty else { return nil }
+        let result = runTmux(["display-message", "-p", "-t", paneId, Self.paneFormat])
         guard result.exitCode == 0 else { return nil }
         return parsePaneLine(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// List all panes across all sessions.
     public func listPanes() -> [PaneInfo] {
-        let format = "#{pane_id}\t#{window_id}\t#{session_name}\t#{session_id}\t#{window_name}\t#{pane_title}\t#{pane_pid}\t#{pane_current_path}\t#{pane_active}"
-        let result = runTmux(["list-panes", "-a", "-F", format])
+        let result = runTmux(["list-panes", "-a", "-F", Self.paneFormat])
         guard result.exitCode == 0 else { return [] }
         return result.stdout
             .split(separator: "\n")
@@ -94,7 +132,7 @@ public struct TmuxClient: Sendable {
     // MARK: - Private
 
     private func parsePaneLine(_ line: String) -> PaneInfo? {
-        let parts = line.split(separator: "\t", maxSplits: 8)
+        let parts = line.split(separator: "\t", maxSplits: 8, omittingEmptySubsequences: false)
         guard parts.count == 9 else { return nil }
         return PaneInfo(
             paneId: String(parts[0]),
@@ -110,11 +148,22 @@ public struct TmuxClient: Sendable {
     }
 
     private func runTmux(_ arguments: [String]) -> CommandResult {
-        let result = runner.run(executable: "/usr/bin/env", arguments: ["tmux"] + arguments, environment: nil)
+        let executable: String
+        let invocation: [String]
+        if tmuxExecutable == "/usr/bin/env" {
+            executable = "/usr/bin/env"
+            invocation = ["tmux"] + arguments
+        } else {
+            executable = tmuxExecutable
+            invocation = arguments
+        }
+
+        let result = runner.run(executable: executable, arguments: invocation, environment: nil)
         if result.exitCode != 0 {
             let err = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             if !err.isEmpty {
-                SentinelLogger.tmux.warning("tmux \(arguments.joined(separator: " ")) failed: \(err)")
+                let command = (tmuxExecutable == "/usr/bin/env" ? ["tmux"] : [tmuxExecutable]) + arguments
+                SentinelLogger.tmux.warning("\(command.joined(separator: " ")) failed: \(err)")
             }
         }
         return result

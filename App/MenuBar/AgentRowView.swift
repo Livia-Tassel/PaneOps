@@ -21,12 +21,13 @@ struct AgentRowView: View {
                     Text(agent.displayLabel)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
+                        .help("Label priority: task label > window name > cwd folder > pane id")
                 }
 
                 HStack(spacing: 4) {
-                    Text(agent.paneId)
+                    Text(contextText)
                         .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(contextColor)
                     Text("·")
                         .foregroundStyle(.tertiary)
                     Text(agent.status.rawValue)
@@ -42,7 +43,7 @@ struct AgentRowView: View {
             Spacer()
 
             // Jump button
-            if !agent.paneId.isEmpty {
+            if jumpAvailability.isAvailable {
                 Button {
                     JumpController.jump(to: agent)
                 } label: {
@@ -75,5 +76,23 @@ struct AgentRowView: View {
         if seconds < 60 { return "\(seconds)s ago" }
         if seconds < 3600 { return "\(seconds / 60)m ago" }
         return "\(seconds / 3600)h ago"
+    }
+
+    private var jumpAvailability: JumpAvailability {
+        JumpPolicy.availability(for: agent)
+    }
+
+    private var contextText: String {
+        if let reason = jumpAvailability.reason, agent.status.isActive {
+            return reason
+        }
+        return agent.paneDisplayLabel
+    }
+
+    private var contextColor: Color {
+        if jumpAvailability.isAvailable {
+            return .secondary
+        }
+        return agent.status.isActive ? .orange : .secondary
     }
 }

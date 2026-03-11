@@ -162,6 +162,59 @@ final class OutputProcessorTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(events.value.first?.eventType, .permissionRequested)
     }
+
+    func testDetectsPromptWithoutTrailingNewline() {
+        let expectation = XCTestExpectation(description: "Prompt event emitted from buffered candidate")
+        let receivedEvent = LockedBox<AgentEvent?>(nil)
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "prompt",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            receivedEvent.withLock { $0 = event }
+            expectation.fulfill()
+        }
+
+        processor.processData("❯".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(receivedEvent.value?.eventType, .taskCompleted)
+    }
+
+    func testRateLimitDoesNotDropCriticalLines() {
+        let expectation = XCTestExpectation(description: "Permission event should still be detected")
+        let receivedEvent = LockedBox<AgentEvent?>(nil)
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "rate",
+            rules: rules,
+            stallTimeout: 999,
+            rateLimitLinesPerSec: 1
+        ) { event in
+            if event.eventType == .permissionRequested {
+                receivedEvent.withLock { $0 = event }
+                expectation.fulfill()
+            }
+        }
+
+        processor.processData(
+            """
+            Do you want to proceed? (y/n)
+            noise line 1
+            noise line 2
+            """.data(using: .utf8)!
+        )
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(receivedEvent.value?.eventType, .permissionRequested)
+    }
 }
 
 private final class LockedBox<T>: @unchecked Sendable {

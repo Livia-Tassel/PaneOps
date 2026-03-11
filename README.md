@@ -49,30 +49,32 @@ One-command install (recommended):
 sudo make install
 ```
 
+`make install` is root-safe: when invoked with `sudo`, it builds as the original user to avoid root-owned `.build` artifacts.
+
 ## Run (Development)
 
 1. Start the monitor daemon:
 
 ```bash
-.build/debug/sentinel-monitor
+.build-agent-sentinel/debug/sentinel-monitor
 ```
 
 2. Start the menu bar app in another terminal:
 
 ```bash
-.build/debug/SentinelApp
+.build-agent-sentinel/debug/SentinelApp
 ```
 
 3. In an iTerm2 + tmux pane, run an agent through wrapper:
 
 ```bash
-.build/debug/agent-sentinel run --agent claude --label auth-fix -- claude
+.build-agent-sentinel/debug/agent-sentinel run --agent claude --label auth-fix -- claude
 ```
 
 Example for Codex:
 
 ```bash
-.build/debug/agent-sentinel run --agent codex --label tests -- codex
+.build-agent-sentinel/debug/agent-sentinel run --agent codex --label tests -- codex
 ```
 
 ## Daily Use (After Install)
@@ -95,6 +97,8 @@ make status
 make logs
 make down
 ```
+
+`make up` now waits for monitor readiness (socket) before starting the app, so first start may take a few seconds.
 
 ## CLI Commands
 

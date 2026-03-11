@@ -13,11 +13,20 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
     var activeAgents: [AgentInstance] {
         agents.values
             .filter { $0.status == .running || $0.status == .waiting || $0.status == .stalled }
-            .sorted { $0.startedAt < $1.startedAt }
+            .sorted {
+                if $0.lastActiveAt == $1.lastActiveAt {
+                    return $0.startedAt > $1.startedAt
+                }
+                return $0.lastActiveAt > $1.lastActiveAt
+            }
     }
 
     var allAgents: [AgentInstance] {
         agents.values.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    var activeAgentIDs: Set<UUID> {
+        Set(activeAgents.map(\.id))
     }
 
     var recentEvents: [AgentEvent] {
@@ -33,7 +42,8 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
             EventPolicy.isActionable(
                 $0,
                 now: Date(),
-                actionableWindowSeconds: config.actionableEventWindowSeconds
+                actionableWindowSeconds: config.actionableEventWindowSeconds,
+                activeAgentIDs: activeAgentIDs
             )
         }.count
     }
@@ -64,7 +74,7 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
         case .stalledOrWaiting:
             agents[agentId]?.status = .stalled
         case .taskCompleted:
-            agents[agentId]?.status = .completed
+            agents[agentId]?.status = .running
         }
         agents[agentId]?.lastActiveAt = event.timestamp
     }
@@ -83,10 +93,12 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
 
     func applySnapshot(_ snapshot: MonitorSnapshot) {
         agents = Dictionary(uniqueKeysWithValues: snapshot.agents.map { ($0.id, $0) })
+        let activeIDs = Set(snapshot.agents.filter(\.status.isActive).map(\.id))
         events = EventPolicy.normalizeHistory(
             Array(snapshot.events.suffix(200)),
             now: Date(),
-            actionableWindowSeconds: snapshot.config.actionableEventWindowSeconds
+            actionableWindowSeconds: snapshot.config.actionableEventWindowSeconds,
+            activeAgentIDs: activeIDs
         )
         config = snapshot.config
     }
@@ -101,6 +113,14 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
         for i in events.indices {
             events[i].acknowledged = true
         }
+    }
+
+    func acknowledgeAllPendingEventIDs() -> [UUID] {
+        let ids = pendingActionableEventIDs()
+        for id in ids {
+            acknowledgeEvent(id: id)
+        }
+        return ids
     }
 
     func removeAgent(id: UUID) {
@@ -120,5 +140,19 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
             deduped.append(event)
         }
         return deduped
+    }
+
+    private func pendingActionableEventIDs() -> [UUID] {
+        deduplicatedRecentEvents().compactMap { event in
+            guard EventPolicy.isActionable(
+                event,
+                now: Date(),
+                actionableWindowSeconds: config.actionableEventWindowSeconds,
+                activeAgentIDs: activeAgentIDs
+            ) else {
+                return nil
+            }
+            return event.id
+        }
     }
 }

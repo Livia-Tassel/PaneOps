@@ -31,6 +31,8 @@ public final class OutputProcessor: @unchecked Sendable {
     private let maxLineBufferChars = 16_384
     private var recentLineSeenAt: [String: Date] = [:]
     private let repeatedLineSuppressionSeconds: TimeInterval = 1.2
+    private var lastBufferedCandidateKey = ""
+    private var lastBufferedCandidateAt = Date.distantPast
 
     public init(
         agentId: UUID,
@@ -93,16 +95,17 @@ public final class OutputProcessor: @unchecked Sendable {
             lastRateCheck = now
         }
 
-        if lineCount > rateLimitLinesPerSec {
-            // Only process the last line
-            if let last = lines.last {
-                processLine(last)
-            }
-        } else {
-            for line in lines {
-                processLine(line)
-            }
+        // Keep correctness first: never drop lines from rule matching path.
+        // Under bursts we only tighten duplicate-cache retention to control memory.
+        if lineCount > rateLimitLinesPerSec, recentLineSeenAt.count > 256 {
+            let threshold = now.addingTimeInterval(-2)
+            recentLineSeenAt = recentLineSeenAt.filter { $0.value > threshold }
         }
+        for line in lines {
+            processLine(line)
+        }
+
+        processBufferedCandidate()
     }
 
     /// Flush any remaining buffered content (call when PTY closes).
@@ -133,25 +136,7 @@ public final class OutputProcessor: @unchecked Sendable {
         }
 
         if let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) {
-            if debugMode, let fh = debugFile {
-                let logLine = "[MATCH] rule=\(match.rule.name) type=\(match.rule.eventType.rawValue)\n"
-                fh.write(logLine.data(using: .utf8)!)
-            }
-            let event = AgentEvent(
-                agentId: agentId,
-                agentType: agentType,
-                displayLabel: displayLabel,
-                eventType: match.rule.eventType,
-                summary: stripped,
-                matchedRule: match.rule.name,
-                priority: match.rule.priority,
-                shouldNotify: match.rule.triggersNotification,
-                dedupeKey: "\(agentId.uuidString)|\(match.rule.id.uuidString)|\(stableKeyFragment(from: stripped))",
-                paneId: paneId,
-                windowId: windowId,
-                sessionName: sessionName
-            )
-            onEvent(event)
+            emitMatchedEvent(match, summary: stripped)
         }
     }
 
@@ -198,5 +183,54 @@ public final class OutputProcessor: @unchecked Sendable {
     private func stableKeyFragment(from line: String) -> String {
         let lowered = line.lowercased()
         return String(lowered.prefix(120))
+    }
+
+    private func processBufferedCandidate() {
+        let stripped = stripper.strip(lineBuffer).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stripped.isEmpty else { return }
+        guard stripped.count <= 120 else { return }
+
+        guard let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) else {
+            return
+        }
+        guard match.rule.eventType == .inputRequested
+            || match.rule.eventType == .permissionRequested
+            || match.rule.eventType == .taskCompleted
+        else {
+            return
+        }
+
+        let now = Date()
+        let key = "\(match.rule.id.uuidString)|\(stableKeyFragment(from: stripped))"
+        if key == lastBufferedCandidateKey, now.timeIntervalSince(lastBufferedCandidateAt) < 1.5 {
+            return
+        }
+        lastBufferedCandidateKey = key
+        lastBufferedCandidateAt = now
+
+        emitMatchedEvent(match, summary: stripped)
+    }
+
+    private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {
+        if debugMode, let fh = debugFile {
+            let logLine = "[MATCH] rule=\(match.rule.name) type=\(match.rule.eventType.rawValue)\n"
+            fh.write(logLine.data(using: .utf8)!)
+        }
+
+        let event = AgentEvent(
+            agentId: agentId,
+            agentType: agentType,
+            displayLabel: displayLabel,
+            eventType: match.rule.eventType,
+            summary: summary,
+            matchedRule: match.rule.name,
+            priority: match.rule.priority,
+            shouldNotify: match.rule.triggersNotification,
+            dedupeKey: "\(agentId.uuidString)|\(match.rule.id.uuidString)|\(stableKeyFragment(from: summary))",
+            paneId: paneId,
+            windowId: windowId,
+            sessionName: sessionName
+        )
+        onEvent(event)
     }
 }

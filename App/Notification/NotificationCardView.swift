@@ -63,14 +63,15 @@ private struct EventCardRow: View {
             }
 
             VStack(spacing: 4) {
-                Button {
-                    onJump(event)
-                } label: {
-                    Image(systemName: "arrow.right.circle.fill")
+                if jumpAvailability.isAvailable {
+                    Button {
+                        onJump(event)
+                    } label: {
+                        Image(systemName: "arrow.right.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
-                .disabled(event.paneId.isEmpty)
 
                 Button {
                     onDismiss(event.id)
@@ -99,5 +100,9 @@ private struct EventCardRow: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
+    }
+
+    private var jumpAvailability: JumpAvailability {
+        JumpPolicy.availability(for: event)
     }
 }

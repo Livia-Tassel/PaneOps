@@ -12,6 +12,16 @@ public struct JumpRequest: Sendable {
     }
 }
 
+public struct JumpPreflightResult: Sendable, Equatable {
+    public let canJump: Bool
+    public let reason: String?
+
+    public init(canJump: Bool, reason: String? = nil) {
+        self.canJump = canJump
+        self.reason = reason
+    }
+}
+
 public enum JumpError: LocalizedError, Sendable {
     case tmuxUnavailable
     case paneNotFound(String)
@@ -48,10 +58,33 @@ public struct JumpService: Sendable {
         self.runner = runner
     }
 
+    public func preflight(_ request: JumpRequest) -> JumpPreflightResult {
+        guard tmux.isAvailable() else {
+            return JumpPreflightResult(canJump: false, reason: JumpError.tmuxUnavailable.localizedDescription)
+        }
+        guard !request.paneId.isEmpty else {
+            return JumpPreflightResult(canJump: false, reason: "No tmux pane id available.")
+        }
+        guard tmux.paneExists(request.paneId) else {
+            return JumpPreflightResult(canJump: false, reason: JumpError.paneNotFound(request.paneId).localizedDescription)
+        }
+        if !request.sessionName.isEmpty, !tmux.sessionExists(request.sessionName) {
+            return JumpPreflightResult(canJump: false, reason: JumpError.sessionNotFound(request.sessionName).localizedDescription)
+        }
+        return JumpPreflightResult(canJump: true)
+    }
+
     @discardableResult
     public func jump(to request: JumpRequest, ensureITermVisible: Bool = true) throws -> Bool {
-        guard tmux.isAvailable() else { throw JumpError.tmuxUnavailable }
-        guard tmux.paneExists(request.paneId) else { throw JumpError.paneNotFound(request.paneId) }
+        let check = preflight(request)
+        if !check.canJump {
+            if !tmux.isAvailable() { throw JumpError.tmuxUnavailable }
+            if !tmux.paneExists(request.paneId) { throw JumpError.paneNotFound(request.paneId) }
+            if !request.sessionName.isEmpty, !tmux.sessionExists(request.sessionName) {
+                throw JumpError.sessionNotFound(request.sessionName)
+            }
+            throw JumpError.selectPaneFailed(request.paneId)
+        }
 
         if !request.sessionName.isEmpty {
             guard tmux.sessionExists(request.sessionName) else {

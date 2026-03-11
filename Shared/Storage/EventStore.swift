@@ -39,6 +39,30 @@ public final class EventStore: @unchecked Sendable {
         rotateIfNeeded()
     }
 
+    /// Rewrite the event file with the provided full event list.
+    public func rewrite(_ events: [AgentEvent]) throws {
+        try AppConfig.ensureDirectory()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        let content = try events.map { event -> String in
+            let data = try encoder.encode(event)
+            guard let line = String(data: data, encoding: .utf8) else {
+                return ""
+            }
+            return line
+        }
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        let finalContent = content.isEmpty ? "" : content + "\n"
+        let data = finalContent.data(using: .utf8) ?? Data()
+        try data.write(to: fileURL, options: .atomic)
+    }
+
     /// Load the most recent N events.
     public func loadRecent(_ count: Int = 50) -> [AgentEvent] {
         lock.lock()

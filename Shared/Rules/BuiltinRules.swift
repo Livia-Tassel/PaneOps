@@ -9,7 +9,7 @@ public enum BuiltinRules {
     // MARK: - Claude Code
 
     public static let claude: [Rule] = [
-        // The ❯ prompt on its own line means Claude finished and is waiting for input
+        // The ❯ prompt on its own line means Claude completed the current turn.
         Rule(
             id: UUID(uuidString: "00000001-0001-0001-0001-000000000006")!,
             name: "Claude: Prompt ready (❯)",
@@ -18,7 +18,7 @@ public enum BuiltinRules {
                 RulePattern(kind: .regex, value: "^❯\\s*$"),
                 RulePattern(kind: .regex, value: "^\\s*❯\\s*$"),
             ],
-            eventType: .inputRequested,
+            eventType: .taskCompleted,
             priority: .normal,
             isBuiltin: true,
             cooldownSeconds: 5
@@ -32,6 +32,8 @@ public enum BuiltinRules {
                 RulePattern(kind: .keyword, value: "Allow once"),
                 RulePattern(kind: .keyword, value: "Allow always"),
                 RulePattern(kind: .keyword, value: "want to allow"),
+                RulePattern(kind: .regex, value: "(?i)approve|approval required"),
+                RulePattern(kind: .regex, value: "(?i)(allow|proceed).*(y/n|yes/no)"),
             ],
             eventType: .permissionRequested,
             priority: .high,
@@ -45,6 +47,8 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(kind: .keyword, value: "Task completed"),
                 RulePattern(kind: .keyword, value: "Completed in"),
+                RulePattern(kind: .keyword, value: "task complete"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed( successfully)?\\.?\\s*$"),
             ],
             eventType: .taskCompleted,
             priority: .normal,
@@ -76,6 +80,7 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(kind: .regex, value: "(?i)^\\s*>\\s*$"),
                 RulePattern(kind: .keyword, value: "Press Enter to continue"),
+                RulePattern(kind: .keyword, value: "waiting for your input"),
             ],
             eventType: .inputRequested,
             priority: .normal,
@@ -86,7 +91,11 @@ public enum BuiltinRules {
             id: UUID(uuidString: "00000002-0002-0002-0002-000000000001")!,
             name: "Codex: Approve changes",
             agentType: .codex,
-            patterns: [RulePattern(kind: .keyword, value: "approve changes")],
+            patterns: [
+                RulePattern(kind: .keyword, value: "approve changes"),
+                RulePattern(kind: .keyword, value: "approve this change"),
+                RulePattern(kind: .regex, value: "(?i)(approve|allow).*(y/n|yes/no)"),
+            ],
             eventType: .permissionRequested,
             priority: .high,
             isBuiltin: true,
@@ -96,7 +105,12 @@ public enum BuiltinRules {
             id: UUID(uuidString: "00000002-0002-0002-0002-000000000002")!,
             name: "Codex: Completed",
             agentType: .codex,
-            patterns: [RulePattern(kind: .keyword, value: "completed successfully")],
+            patterns: [
+                RulePattern(kind: .keyword, value: "completed successfully"),
+                RulePattern(kind: .keyword, value: "task completed"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed( successfully)?\\.?\\s*$"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*all done\\.?\\s*$"),
+            ],
             eventType: .taskCompleted,
             priority: .normal,
             isBuiltin: true,
@@ -127,6 +141,7 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(kind: .keyword, value: "Confirm"),
                 RulePattern(kind: .keyword, value: "confirm action"),
+                RulePattern(kind: .regex, value: "(?i)(allow|approve|confirm).*(y/n|yes/no)"),
             ],
             eventType: .permissionRequested,
             priority: .high,
@@ -140,6 +155,8 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(kind: .keyword, value: "Done"),
                 RulePattern(kind: .keyword, value: "Finished"),
+                RulePattern(kind: .keyword, value: "Task completed"),
+                RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed\\.?\\s*$"),
             ],
             eventType: .taskCompleted,
             priority: .normal,
@@ -158,6 +175,7 @@ public enum BuiltinRules {
             patterns: [
                 RulePattern(kind: .regex, value: "(?i)waiting for (user )?input"),
                 RulePattern(kind: .regex, value: "(?i)press enter to continue"),
+                RulePattern(kind: .regex, value: "(?i)enter (yes/no|y/n)"),
             ],
             eventType: .inputRequested,
             priority: .normal,

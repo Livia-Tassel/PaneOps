@@ -49,6 +49,7 @@ struct EventListView: View {
 struct EventRowView: View {
     let event: AgentEvent
     @EnvironmentObject var registry: AgentRegistry
+    @EnvironmentObject var ipcService: IPCService
 
     var body: some View {
         HStack(spacing: 8) {
@@ -81,7 +82,7 @@ struct EventRowView: View {
 
             Spacer()
 
-            if !event.paneId.isEmpty {
+            if jumpAvailability.isAvailable {
                 Button {
                     JumpController.jumpToPane(
                         paneId: event.paneId,
@@ -89,6 +90,7 @@ struct EventRowView: View {
                         sessionName: event.sessionName
                     )
                     registry.acknowledgeEvent(id: event.id)
+                    ipcService.send(.ack(messageId: event.id))
                 } label: {
                     Image(systemName: "arrow.right.circle")
                         .font(.caption)
@@ -99,11 +101,12 @@ struct EventRowView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-                .background(
+        .background(
             EventPolicy.isActionable(
                 event,
                 now: Date(),
-                actionableWindowSeconds: registry.config.actionableEventWindowSeconds
+                actionableWindowSeconds: registry.config.actionableEventWindowSeconds,
+                activeAgentIDs: registry.activeAgentIDs
             ) ? Color.accentColor.opacity(0.05) : Color.clear,
             in: RoundedRectangle(cornerRadius: 6)
         )
@@ -123,5 +126,9 @@ struct EventRowView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
+    }
+
+    private var jumpAvailability: JumpAvailability {
+        JumpPolicy.availability(for: event)
     }
 }

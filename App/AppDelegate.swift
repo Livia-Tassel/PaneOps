@@ -11,9 +11,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? AppConfig.ensureDirectory()
         MonitorBootstrap.ensureRunning()
 
-        notificationManager = NotificationManager(configProvider: { [weak self] in
-            self?.agentRegistry.config ?? AppConfig()
-        })
+        notificationManager = NotificationManager(
+            configProvider: { [weak self] in
+                self?.agentRegistry.config ?? AppConfig()
+            },
+            onAcknowledge: { [weak self] eventId in
+                guard let self else { return }
+                self.agentRegistry.acknowledgeEvent(id: eventId)
+                self.ipcService.send(.ack(messageId: eventId))
+            }
+        )
 
         ipcService.onConnectionChanged = { [weak self] connected in
             DispatchQueue.main.async {
@@ -58,7 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .configUpdate(let config):
             agentRegistry.config = config
 
-        case .ack, .subscribe:
+        case .ack(let messageId):
+            agentRegistry.acknowledgeEvent(id: messageId)
+
+        case .subscribe:
             break
         }
     }

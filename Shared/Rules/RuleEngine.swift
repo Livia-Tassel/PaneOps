@@ -10,13 +10,19 @@ public final class RuleEngine: @unchecked Sendable {
     }
 
     private var rules: [Rule]
-    private var regexCache: [UUID: NSRegularExpression] = [:]
+    private var regexCache: [RegexCacheKey: NSRegularExpression] = [:]
     private var cooldowns: [CooldownKey: Date] = [:]
     private let lock = NSLock()
 
     private struct CooldownKey: Hashable {
         let agentId: UUID
         let ruleId: UUID
+    }
+
+    private struct RegexCacheKey: Hashable {
+        let ruleId: UUID
+        let patternValue: String
+        let caseSensitive: Bool
     }
 
     public init(rules: [Rule] = []) {
@@ -105,15 +111,10 @@ public final class RuleEngine: @unchecked Sendable {
     }
 
     private func cachedRegex(for pattern: RulePattern, ruleId: UUID) -> NSRegularExpression? {
-        // Use a composite key: ruleId + pattern value hash
-        let cacheId = UUID(
-            uuid: (
-                ruleId.uuid.0 ^ UInt8(truncatingIfNeeded: pattern.value.hashValue),
-                ruleId.uuid.1, ruleId.uuid.2, ruleId.uuid.3,
-                ruleId.uuid.4, ruleId.uuid.5, ruleId.uuid.6, ruleId.uuid.7,
-                ruleId.uuid.8, ruleId.uuid.9, ruleId.uuid.10, ruleId.uuid.11,
-                ruleId.uuid.12, ruleId.uuid.13, ruleId.uuid.14, ruleId.uuid.15
-            )
+        let cacheId = RegexCacheKey(
+            ruleId: ruleId,
+            patternValue: pattern.value,
+            caseSensitive: pattern.caseSensitive
         )
 
         lock.lock()

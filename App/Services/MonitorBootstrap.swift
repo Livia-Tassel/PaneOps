@@ -41,7 +41,11 @@ enum MonitorBootstrap {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            return true
+            usleep(200_000)
+            if process.isRunning || process.terminationStatus == 0 {
+                return true
+            }
+            return false
         } catch {
             return false
         }

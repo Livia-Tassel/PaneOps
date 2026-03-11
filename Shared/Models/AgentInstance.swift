@@ -8,6 +8,15 @@ public enum AgentStatus: String, Codable, Sendable {
     case errored
     case stalled
     case expired
+
+    public var isActive: Bool {
+        switch self {
+        case .running, .waiting, .stalled:
+            return true
+        case .completed, .errored, .expired:
+            return false
+        }
+    }
 }
 
 /// A monitored agent instance, representing one CLI wrapper process.
@@ -101,6 +110,12 @@ public struct AgentInstance: Codable, Identifiable, Sendable {
         if !cwd.isEmpty { return URL(fileURLWithPath: cwd).lastPathComponent }
         if !paneId.isEmpty { return paneId }
         return id.uuidString.prefix(8).description
+    }
+
+    /// User-friendly pane text to avoid confusion with percentage notation.
+    public var paneDisplayLabel: String {
+        guard !paneId.isEmpty else { return "Not in tmux" }
+        return "Pane \(paneId)"
     }
 
     /// Formatted summary: "Claude · auth-refactor · %12"

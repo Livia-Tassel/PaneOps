@@ -22,12 +22,12 @@ struct RunCommand: ParsableCommand {
     var command: [String]
 
     func run() throws {
-        let filteredCommand = command.filter { $0 != "--" }
-        if filteredCommand == ["--help"] || filteredCommand == ["-h"] {
+        if command == ["--help"] || command == ["-h"] {
             throw CleanExit.helpRequest(self)
         }
+        let normalizedCommand = PassthroughArguments.normalize(command)
 
-        guard !filteredCommand.isEmpty else {
+        guard !normalizedCommand.isEmpty else {
             throw ValidationError("No command specified. Usage: agent-sentinel run -- <command>")
         }
 
@@ -38,12 +38,12 @@ struct RunCommand: ParsableCommand {
             }
             agentType = parsed
         } else {
-            agentType = AgentType.detect(from: filteredCommand.joined(separator: " "))
+            agentType = AgentType.detect(from: normalizedCommand.joined(separator: " "))
         }
 
-        // Gather tmux context
+        // Gather tmux context (strict requirement).
         let tmux = TmuxClient()
-        let paneInfo = tmux.currentPane()
+        let paneInfo = try Self.requireTmuxContext(gatherTmuxContext(using: tmux))
 
         let agentId = UUID()
         let config = AppConfig.load()
@@ -52,12 +52,12 @@ struct RunCommand: ParsableCommand {
         let instance = AgentInstance(
             id: agentId,
             agentType: agentType,
-            sessionName: paneInfo?.sessionName ?? "",
-            sessionId: paneInfo?.sessionId ?? "",
-            windowId: paneInfo?.windowId ?? "",
-            paneId: paneInfo?.paneId ?? "",
-            windowName: paneInfo?.windowName ?? "",
-            paneTitle: paneInfo?.paneTitle ?? "",
+            sessionName: paneInfo.sessionName,
+            sessionId: paneInfo.sessionId,
+            windowId: paneInfo.windowId,
+            paneId: paneInfo.paneId,
+            windowName: paneInfo.windowName,
+            paneTitle: paneInfo.paneTitle,
             cwd: FileManager.default.currentDirectoryPath,
             taskLabel: label,
             pid: ProcessInfo.processInfo.processIdentifier,
@@ -68,10 +68,10 @@ struct RunCommand: ParsableCommand {
         let ipcClient = connectToMonitorAndRegister(instance)
 
         // Set up the PTY wrapper
-        let executable = filteredCommand[0]
+        let executable = normalizedCommand[0]
         let pty: PTYWrapper
         do {
-            pty = try PTYWrapper(command: executable, arguments: filteredCommand)
+            pty = try PTYWrapper(command: executable, arguments: normalizedCommand)
         } catch {
             throw ValidationError("Failed to create PTY: \(error)")
         }
@@ -186,10 +186,44 @@ struct RunCommand: ParsableCommand {
             process.standardError = FileHandle.nullDevice
             do {
                 try process.run()
-                return
+                usleep(200_000)
+                if process.isRunning || process.terminationStatus == 0 {
+                    return
+                }
             } catch {
                 continue
             }
         }
+    }
+
+    private func gatherTmuxContext(using tmux: TmuxClient) -> PaneInfo? {
+        let env = ProcessInfo.processInfo.environment
+        if let paneId = env["TMUX_PANE"], !paneId.isEmpty {
+            if let pane = tmux.paneInfo(for: paneId) {
+                return pane
+            }
+        }
+
+        return tmux.currentPane()
+    }
+
+    static func requireTmuxContext(_ paneInfo: PaneInfo?) throws -> PaneInfo {
+        guard let paneInfo else {
+            throw ValidationError(
+                """
+                agent-sentinel run must be launched inside a tmux pane.
+                Start tmux first, then run: agent-sentinel run -- <command>
+                """
+            )
+        }
+        guard !paneInfo.paneId.isEmpty, !paneInfo.sessionName.isEmpty, !paneInfo.windowId.isEmpty else {
+            throw ValidationError(
+                """
+                Failed to resolve complete tmux context (pane/session/window).
+                Please run inside an attached tmux pane and retry.
+                """
+            )
+        }
+        return paneInfo
     }
 }

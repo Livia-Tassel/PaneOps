@@ -1,6 +1,6 @@
 .PHONY: build build-cli build-app build-monitor release install install-cli install-monitor install-app up down status logs test clean format help
 
-BUILD_DIR := .build
+BUILD_DIR := .build-agent-sentinel
 CLI_NAME := agent-sentinel
 MONITOR_NAME := sentinel-monitor
 APP_BINARY := SentinelApp
@@ -11,26 +11,35 @@ LOG_DIR := $(HOME)/.agent-sentinel/logs
 MONITOR_LOG := $(LOG_DIR)/monitor.log
 APP_LOG := $(LOG_DIR)/app.log
 SOCKET_PATH := $(HOME)/.agent-sentinel/monitor.sock
+MONITOR_STARTUP_RETRIES := 100
+MONITOR_STARTUP_SLEEP := 0.2
+SWIFT_BUILD := swift build --build-path $(BUILD_DIR)
+SWIFT_TEST := swift test --build-path $(BUILD_DIR)
 
 # Build all targets
 build:
-	swift build
+	$(SWIFT_BUILD)
 
 # Build CLI only
 build-cli:
-	swift build --target SentinelCLI
+	$(SWIFT_BUILD) --target SentinelCLI
 
 # Build App only
 build-app:
-	swift build --target SentinelApp
+	$(SWIFT_BUILD) --target SentinelApp
 
 # Build monitor daemon only
 build-monitor:
-	swift build --target SentinelMonitor
+	$(SWIFT_BUILD) --target SentinelMonitor
 
 # Release build
 release:
-	swift build -c release
+	@if [ "$$(id -u)" -eq 0 ] && [ -n "$$SUDO_USER" ] && [ "$$SUDO_USER" != "root" ]; then \
+		echo "Building as $$SUDO_USER to avoid root-owned .build artifacts"; \
+		sudo -u "$$SUDO_USER" HOME="$$(eval echo ~$$SUDO_USER)" swift build --build-path $(BUILD_DIR) -c release; \
+	else \
+		$(SWIFT_BUILD) -c release; \
+	fi
 
 # Install all binaries (CLI + monitor + app launcher)
 install: release install-cli install-monitor install-app
@@ -82,9 +91,9 @@ up:
 		nohup $(MONITOR_NAME) >$(MONITOR_LOG) 2>&1 & \
 		echo "Started $(MONITOR_NAME) (log: $(MONITOR_LOG))"; \
 	fi
-	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+	@for i in $$(seq 1 $(MONITOR_STARTUP_RETRIES)); do \
 		[ -S "$(SOCKET_PATH)" ] && break; \
-		sleep 0.2; \
+		sleep $(MONITOR_STARTUP_SLEEP); \
 	done
 	@if ! pgrep -f '(^|/)$(MONITOR_NAME)$$' >/dev/null 2>&1; then \
 		echo "Monitor failed to stay alive. Check: make logs"; \
@@ -140,16 +149,17 @@ status:
 # Tail monitor and app logs
 logs:
 	@mkdir -p $(LOG_DIR)
-	@echo "== monitor ==" && tail -n 40 $(MONITOR_LOG) 2>/dev/null || true
-	@echo "== app ==" && tail -n 40 $(APP_LOG) 2>/dev/null || true
+	@echo "== monitor (nohup) ==" && tail -n 40 $(MONITOR_LOG) 2>/dev/null || true
+	@echo "== app (nohup) ==" && tail -n 40 $(APP_LOG) 2>/dev/null || true
+	@echo "== monitor (os.Logger, last 5m) ==" && log show --style compact --last 5m --predicate 'subsystem == "com.paneops.agent-sentinel" && category == "monitor"' 2>/dev/null | tail -n 40 || true
+	@echo "== ipc (os.Logger, last 5m) ==" && log show --style compact --last 5m --predicate 'subsystem == "com.paneops.agent-sentinel" && category == "ipc"' 2>/dev/null | tail -n 40 || true
 
 # Run tests
 test:
-	swift test
+	$(SWIFT_TEST)
 
 # Clean build artifacts
 clean:
-	swift package clean
 	rm -rf $(BUILD_DIR)
 
 # Format code (if swift-format is installed)

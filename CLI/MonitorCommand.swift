@@ -33,8 +33,8 @@ struct MonitorCommand: ParsableCommand {
     var command: [String]
 
     func run() throws {
-        let filteredCommand = command.filter { $0 != "--" }
-        guard !filteredCommand.isEmpty else {
+        let normalizedCommand = PassthroughArguments.normalize(command)
+        guard !normalizedCommand.isEmpty else {
             throw ValidationError("No command specified")
         }
 
@@ -69,7 +69,7 @@ struct MonitorCommand: ParsableCommand {
         }
 
         // Execute command via PTY
-        let pty = try PTYWrapper(command: filteredCommand[0], arguments: filteredCommand)
+        let pty = try PTYWrapper(command: normalizedCommand[0], arguments: normalizedCommand)
 
         let outputTask = Task {
             for await data in pty.outputStream() {
