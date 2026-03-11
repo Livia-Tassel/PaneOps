@@ -191,6 +191,14 @@ actor MonitorState {
             saveAgents()
             await broadcast(.configUpdate(config))
 
+        case .maintenance(let request):
+            do {
+                try performMaintenance(request.action)
+            } catch {
+                SentinelLogger.storage.warning("Maintenance action \(request.action.rawValue) failed: \(error.localizedDescription)")
+            }
+            await broadcast(.snapshot(currentSnapshot()))
+
         case .ack(let messageId):
             if acknowledgeEvent(id: messageId) {
                 persistEventsSnapshot()
@@ -435,6 +443,34 @@ actor MonitorState {
 
     private func saveAgents() {
         Self.persistAgents(agents)
+    }
+
+    private func performMaintenance(_ action: MaintenanceAction) throws {
+        switch action {
+        case .clearLogs:
+            try LocalDataMaintenance.clearLogs()
+
+        case .clearEventHistory:
+            events.removeAll()
+            dedupeSeenAt.removeAll()
+            try eventStore.rewrite([])
+
+        case .clearAgentCache:
+            agents.removeAll()
+            stallAlertedAgentIDs.removeAll()
+            saveAgents()
+
+        case .clearAll:
+            events.removeAll()
+            dedupeSeenAt.removeAll()
+            try eventStore.rewrite([])
+
+            agents.removeAll()
+            stallAlertedAgentIDs.removeAll()
+            saveAgents()
+
+            try LocalDataMaintenance.clearLogs()
+        }
     }
 
     private static func persistAgents(_ agents: [UUID: AgentInstance]) {

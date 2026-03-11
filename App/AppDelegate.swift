@@ -68,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .ack(let messageId):
             agentRegistry.acknowledgeEvent(id: messageId)
 
+        case .maintenance:
+            break
+
         case .subscribe:
             break
         }

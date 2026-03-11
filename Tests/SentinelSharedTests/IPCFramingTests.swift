@@ -132,6 +132,19 @@ final class IPCFramingTests: XCTestCase {
         }
     }
 
+    func testRoundtripMaintenance() throws {
+        let request = MaintenanceRequest(action: .clearEventHistory)
+        let message = IPCMessage.maintenance(request)
+        let encoded = try IPCFraming.encode(message)
+        let (decoded, _) = try XCTUnwrap(IPCFraming.decode(from: encoded))
+
+        if case .maintenance(let decodedRequest) = decoded {
+            XCTAssertEqual(decodedRequest.action, .clearEventHistory)
+        } else {
+            XCTFail("Expected maintenance message")
+        }
+    }
+
     func testIncompleteBuffer() throws {
         let agent = AgentInstance(agentType: .claude)
         let encoded = try IPCFraming.encode(.register(agent))

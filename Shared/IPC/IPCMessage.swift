@@ -37,6 +37,7 @@ public enum IPCMessage: Codable, Sendable {
     case snapshot(MonitorSnapshot)
     case ack(messageId: UUID)
     case configUpdate(AppConfig)
+    case maintenance(MaintenanceRequest)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -52,6 +53,7 @@ public enum IPCMessage: Codable, Sendable {
         case snapshot
         case ack
         case configUpdate
+        case maintenance
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -81,6 +83,9 @@ public enum IPCMessage: Codable, Sendable {
         case .configUpdate(let config):
             try container.encode(MessageType.configUpdate, forKey: .type)
             try container.encode(config, forKey: .payload)
+        case .maintenance(let request):
+            try container.encode(MessageType.maintenance, forKey: .type)
+            try container.encode(request, forKey: .payload)
         }
     }
 
@@ -107,6 +112,8 @@ public enum IPCMessage: Codable, Sendable {
             self = .ack(messageId: payload.messageId)
         case .configUpdate:
             self = .configUpdate(try container.decode(AppConfig.self, forKey: .payload))
+        case .maintenance:
+            self = .maintenance(try container.decode(MaintenanceRequest.self, forKey: .payload))
         }
     }
 }
