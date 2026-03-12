@@ -429,32 +429,87 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
     }
 
-    func testSuppressesCodexInputEchoUntilAssistantOutputThenAllowsCompletion() {
+    func testCodexQuietCompletionAfterAssistantOutputSilence() {
+        let expectation = XCTestExpectation(description: "Codex emits quiet completion after assistant output")
         let events = LockedBox<[AgentEvent]>([])
         let rules = RuleEngine.effectiveRules(config: AppConfig())
         let processor = OutputProcessor(
             agentId: UUID(),
             agentType: .codex,
-            displayLabel: "codex-echo",
+            displayLabel: "codex-quiet",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            codexCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            if event.eventType == .taskCompleted {
+                expectation.fulfill()
+            }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("› hello".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.processData("• Hello.\n".data(using: .utf8)!)
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.matchedRule, "Codex: Quiet completion")
+        XCTAssertEqual(events.value.first?.summary, "Response completed: Hello.")
+    }
+
+    func testCodexChromeDoesNotTriggerQuietCompletionBeforeAssistantOutput() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "codex-chrome",
+            rules: rules,
+            stallTimeout: 999,
+            codexCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
 
         processor.noteUserInput("hello\n".data(using: .utf8)!)
-        processor.processData("› hello".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
-        XCTAssertTrue(events.value.isEmpty)
+        processor.processData("gpt-5.4 medium · 84% left · ~/Documents/Project/PaneOps · gpt-5.4 · PaneOps · master · 16% used · 5h 72%\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.25)
 
+        XCTAssertTrue(events.value.isEmpty)
+    }
+
+    func testCodexQuietCompletionSuppressesLaterPromptDuplicate() {
+        let expectation = XCTestExpectation(description: "Codex quiet completion emits once")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "codex-dedupe",
+            rules: rules,
+            stallTimeout: 999,
+            codexCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            if event.eventType == .taskCompleted {
+                expectation.fulfill()
+            }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
         processor.processData("• Hello.\n".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.4)
-        processor.processData("› hello".data(using: .utf8)!)
+        wait(for: [expectation], timeout: 1.0)
+
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("› ".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.1)
 
         XCTAssertEqual(events.value.count, 1)
-        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
-        XCTAssertEqual(events.value.first?.summary, "› hello")
+        XCTAssertEqual(events.value.first?.matchedRule, "Codex: Quiet completion")
     }
 
     func testSuppressesRepeatedClaudePromptReadyWhileIdle() {

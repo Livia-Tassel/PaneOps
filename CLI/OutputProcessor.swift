@@ -15,6 +15,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private let debugMode: Bool
     private let debugFile: FileHandle?
     private let suppressInteractiveUntilFirstInput: Bool
+    private let codexCompletionQuietPeriod: TimeInterval
     private var pendingUTF8Bytes = Data()
 
     // Rate limiting
@@ -36,6 +37,9 @@ public final class OutputProcessor: @unchecked Sendable {
     private var hasObservedUserInput = false
     private var lastUserInputAt: Date?
     private var hasEmittedCompletionSinceLastUserInput = false
+    private var hasSeenCodexAssistantOutputSinceLastUserInput = false
+    private var latestCodexAssistantSummary = ""
+    private var codexCompletionTimer: Task<Void, Never>?
 
     public init(
         agentId: UUID,
@@ -49,6 +53,7 @@ public final class OutputProcessor: @unchecked Sendable {
         rateLimitLinesPerSec: Int = 100,
         debugMode: Bool = false,
         suppressInteractiveUntilFirstInput: Bool = false,
+        codexCompletionQuietPeriod: TimeInterval = 3,
         onEvent: @escaping @Sendable (AgentEvent) -> Void
     ) {
         self.agentId = agentId
@@ -62,6 +67,7 @@ public final class OutputProcessor: @unchecked Sendable {
         self.rateLimitLinesPerSec = rateLimitLinesPerSec
         self.debugMode = debugMode
         self.suppressInteractiveUntilFirstInput = suppressInteractiveUntilFirstInput
+        self.codexCompletionQuietPeriod = codexCompletionQuietPeriod
         self.onEvent = onEvent
 
         if debugMode {
@@ -130,6 +136,7 @@ public final class OutputProcessor: @unchecked Sendable {
             lineBuffer = ""
         }
         stallTimer?.cancel()
+        codexCompletionTimer?.cancel()
     }
 
     /// Update rules (e.g., from config change).
@@ -144,6 +151,9 @@ public final class OutputProcessor: @unchecked Sendable {
 
         lastUserInputAt = Date()
         hasEmittedCompletionSinceLastUserInput = false
+        hasSeenCodexAssistantOutputSinceLastUserInput = false
+        latestCodexAssistantSummary = ""
+        codexCompletionTimer?.cancel()
 
         guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return }
         hasObservedUserInput = true
@@ -163,13 +173,16 @@ public final class OutputProcessor: @unchecked Sendable {
             fh.write(logLine.data(using: .utf8)!)
         }
 
-        if let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) {
+        let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId)
+        if let match {
             if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
             if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
             if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
             guard !shouldSuppressRepeatedLine(stripped) else { return }
             emitMatchedEvent(match, summary: stripped)
         }
+
+        observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
     }
 
     private func resetStallTimer() {
@@ -220,24 +233,26 @@ public final class OutputProcessor: @unchecked Sendable {
     private func processBufferedCandidate() {
         let stripped = stripper.strip(lineBuffer).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stripped.isEmpty else { return }
-        guard stripped.count <= 120 else { return }
-        if isLikelyLocalInputEcho(stripped) { return }
-
-        guard let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) else {
+        if isLikelyLocalInputEcho(stripped) {
+            lineBuffer = ""
             return
         }
-        guard match.rule.eventType == .inputRequested
+        guard stripped.count <= 120 else { return }
+
+        let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId)
+        if let match,
+           match.rule.eventType == .inputRequested
             || match.rule.eventType == .permissionRequested
             || match.rule.eventType == .taskCompleted
-        else {
-            return
+        {
+            if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
+            if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
+            if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
+            if shouldSuppressRepeatedLine(stripped) { return }
+            emitMatchedEvent(match, summary: stripped)
         }
-        if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
-        if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
-        if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
-        if shouldSuppressRepeatedLine(stripped) { return }
 
-        emitMatchedEvent(match, summary: stripped)
+        observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
     }
 
     private func decodeUTF8Text(from data: Data) -> (String, Data) {
@@ -272,6 +287,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {
         if match.rule.eventType == .taskCompleted {
             hasEmittedCompletionSinceLastUserInput = true
+            codexCompletionTimer?.cancel()
         }
 
         if debugMode, let fh = debugFile {
@@ -374,5 +390,105 @@ public final class OutputProcessor: @unchecked Sendable {
 
     private func isPromptLikeLine(_ line: String) -> Bool {
         line.range(of: #"^\s*[❯›>](?:\s+\S.*)?$"#, options: .regularExpression) != nil
+    }
+
+    private func observeCodexCompletionActivity(line: String, matchedEventType: EventType?) {
+        guard agentType == .codex else { return }
+        guard lastUserInputAt != nil else { return }
+        let normalizedLine = normalizeCodexAssistantLine(line)
+
+        switch matchedEventType {
+        case .taskCompleted?:
+            codexCompletionTimer?.cancel()
+            return
+        case .inputRequested?, .permissionRequested?:
+            codexCompletionTimer?.cancel()
+            hasSeenCodexAssistantOutputSinceLastUserInput = false
+            latestCodexAssistantSummary = ""
+            return
+        default:
+            break
+        }
+
+        guard !hasEmittedCompletionSinceLastUserInput else { return }
+        guard !isLikelyCodexChromeLine(normalizedLine) else { return }
+
+        if isLikelyCodexAssistantLead(normalizedLine) {
+            hasSeenCodexAssistantOutputSinceLastUserInput = true
+            latestCodexAssistantSummary = summarizeCodexAssistantLine(normalizedLine)
+            scheduleCodexQuietCompletion()
+            return
+        }
+
+        guard hasSeenCodexAssistantOutputSinceLastUserInput else { return }
+        guard !isPromptLikeLine(normalizedLine) else { return }
+
+        let summary = summarizeCodexAssistantLine(normalizedLine)
+        if !summary.isEmpty {
+            latestCodexAssistantSummary = summary
+        }
+        scheduleCodexQuietCompletion()
+    }
+
+    private func scheduleCodexQuietCompletion() {
+        guard hasSeenCodexAssistantOutputSinceLastUserInput else { return }
+        guard !hasEmittedCompletionSinceLastUserInput else { return }
+        guard !latestCodexAssistantSummary.isEmpty else { return }
+
+        codexCompletionTimer?.cancel()
+        let summary = latestCodexAssistantSummary
+        codexCompletionTimer = Task.detached { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.codexCompletionQuietPeriod * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            guard !self.hasEmittedCompletionSinceLastUserInput else { return }
+            guard self.hasSeenCodexAssistantOutputSinceLastUserInput else { return }
+
+            self.hasEmittedCompletionSinceLastUserInput = true
+
+            let event = AgentEvent(
+                agentId: self.agentId,
+                agentType: self.agentType,
+                displayLabel: self.displayLabel,
+                eventType: .taskCompleted,
+                summary: "Response completed: \(summary)",
+                matchedRule: "Codex: Quiet completion",
+                priority: .normal,
+                shouldNotify: true,
+                dedupeKey: "\(self.agentId.uuidString)|codex-quiet-completion|\(self.stableKeyFragment(from: summary))",
+                paneId: self.paneId,
+                windowId: self.windowId,
+                sessionName: self.sessionName
+            )
+            self.onEvent(event)
+        }
+    }
+
+    private func isLikelyCodexAssistantLead(_ line: String) -> Bool {
+        line.range(of: #"^\s*•\s+\S.*$"#, options: .regularExpression) != nil
+    }
+
+    private func summarizeCodexAssistantLine(_ line: String) -> String {
+        line
+            .replacingOccurrences(of: #"^\s*•\s+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizeCodexAssistantLine(_ line: String) -> String {
+        guard let assistantMarker = line.range(of: "• ") else { return line }
+        let prefix = String(line[..<assistantMarker.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty, isPromptLikeLine(prefix) else { return line }
+        return String(line[assistantMarker.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isLikelyCodexChromeLine(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        if lowered.contains("openai codex") || lowered.hasPrefix("model:") || lowered.hasPrefix("directory:") {
+            return true
+        }
+        if line.contains("·") && (lowered.contains("% left") || lowered.contains("% used")) {
+            return true
+        }
+        return false
     }
 }
