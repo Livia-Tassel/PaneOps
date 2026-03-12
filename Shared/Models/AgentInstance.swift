@@ -125,4 +125,47 @@ public struct AgentInstance: Codable, Identifiable, Sendable {
         if !paneId.isEmpty { parts.append(paneId) }
         return parts.joined(separator: " · ")
     }
+
+    /// Mark the agent as having recent activity from a heartbeat.
+    public mutating func recordHeartbeat(at timestamp: Date = Date()) {
+        lastActiveAt = timestamp
+        switch status {
+        case .stalled, .expired:
+            status = .running
+        case .running, .waiting, .completed, .errored:
+            break
+        }
+    }
+
+    /// Mark the agent as resumed due to direct user interaction.
+    public mutating func recordResume(at timestamp: Date = Date()) {
+        lastActiveAt = timestamp
+        switch status {
+        case .waiting, .stalled, .expired:
+            status = .running
+        case .running, .completed, .errored:
+            break
+        }
+    }
+
+    /// Apply an observed event to the agent's current status.
+    public mutating func apply(event: AgentEvent) {
+        if event.matchedRule.hasPrefix("monitor-expire-") {
+            status = .expired
+            lastActiveAt = event.timestamp
+            return
+        }
+
+        switch event.eventType {
+        case .permissionRequested, .inputRequested:
+            status = .waiting
+        case .taskCompleted:
+            status = .running
+        case .errorDetected:
+            break
+        case .stalledOrWaiting:
+            status = .stalled
+        }
+        lastActiveAt = event.timestamp
+    }
 }

@@ -57,26 +57,21 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
     }
 
     func heartbeat(agentId: UUID) {
-        agents[agentId]?.lastActiveAt = Date()
+        guard var agent = agents[agentId] else { return }
+        agent.recordHeartbeat(at: Date())
+        agents[agentId] = agent
+    }
+
+    func resume(agentId: UUID) {
+        guard var agent = agents[agentId] else { return }
+        agent.recordResume(at: Date())
+        agents[agentId] = agent
     }
 
     func updateStatus(agentId: UUID, event: AgentEvent) {
-        if event.matchedRule.hasPrefix("monitor-expire-") {
-            agents[agentId]?.status = .expired
-            agents[agentId]?.lastActiveAt = event.timestamp
-            return
-        }
-        switch event.eventType {
-        case .permissionRequested, .inputRequested:
-            agents[agentId]?.status = .waiting
-        case .errorDetected:
-            agents[agentId]?.status = .errored
-        case .stalledOrWaiting:
-            agents[agentId]?.status = .stalled
-        case .taskCompleted:
-            agents[agentId]?.status = .running
-        }
-        agents[agentId]?.lastActiveAt = event.timestamp
+        guard var agent = agents[agentId] else { return }
+        agent.apply(event: event)
+        agents[agentId] = agent
     }
 
     func addEvent(_ event: AgentEvent) {

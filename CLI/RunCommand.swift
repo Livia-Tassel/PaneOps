@@ -127,6 +127,7 @@ struct RunCommand: ParsableCommand {
                 guard bytesRead > 0 else { break }
                 let data = Data(bytes: buffer, count: bytesRead)
                 processor.noteUserInput(data)
+                try? ipcClient?.send(.resume(agentId: agentId))
                 pty.write(data)
             }
         }

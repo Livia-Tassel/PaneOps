@@ -12,24 +12,34 @@ actor MonitorState {
     private let tmux: TmuxClient
     private let nowProvider: @Sendable () -> Date
     private let eventStore: EventStore
+    private let persistAgentsHandler: ([UUID: AgentInstance]) -> Void
 
     init(
         tmux: TmuxClient = TmuxClient(),
-        nowProvider: @escaping @Sendable () -> Date = { Date() }
+        nowProvider: @escaping @Sendable () -> Date = { Date() },
+        config: AppConfig? = nil,
+        eventStore: EventStore? = nil,
+        initialAgents: [UUID: AgentInstance]? = nil,
+        initialEvents: [AgentEvent]? = nil,
+        persistAgents: (([UUID: AgentInstance]) -> Void)? = nil
     ) {
+        let resolvedConfig = (config ?? AppConfig.load()).normalized()
+        let resolvedEventStore = eventStore ?? EventStore(fileURL: AppConfig.eventsFile, maxLines: resolvedConfig.maxStoredEvents)
+
         self.tmux = tmux
         self.nowProvider = nowProvider
-        self.config = AppConfig.load().normalized()
-        self.eventStore = EventStore(fileURL: AppConfig.eventsFile, maxLines: config.maxStoredEvents)
-        self.agents = MonitorState.loadAgents()
+        self.config = resolvedConfig
+        self.eventStore = resolvedEventStore
+        self.agents = initialAgents ?? MonitorState.loadAgents()
+        self.persistAgentsHandler = persistAgents ?? MonitorState.persistAgents
 
         let now = nowProvider()
-        let loadedEvents = eventStore.loadRecent(config.maxStoredEvents)
+        let loadedEvents = initialEvents ?? resolvedEventStore.loadRecent(resolvedConfig.maxStoredEvents)
         let startupActiveAgentIDs = Set(self.agents.values.filter(\.status.isActive).map(\.id))
         self.events = EventPolicy.normalizeHistory(
             loadedEvents,
             now: now,
-            actionableWindowSeconds: config.actionableEventWindowSeconds,
+            actionableWindowSeconds: resolvedConfig.actionableEventWindowSeconds,
             activeAgentIDs: startupActiveAgentIDs
         )
         var generated: [AgentEvent] = []
@@ -83,8 +93,8 @@ actor MonitorState {
         }
 
         if changed {
-            Self.persistAgents(agents)
-            try? eventStore.rewrite(self.events)
+            persistAgentsHandler(agents)
+            try? resolvedEventStore.rewrite(self.events)
         }
     }
 
@@ -109,11 +119,51 @@ actor MonitorState {
             await broadcast(.register(updated))
 
         case .heartbeat(let agentId):
-            agents[agentId]?.lastActiveAt = nowProvider()
-            if agents[agentId]?.status == .stalled || agents[agentId]?.status == .expired {
-                agents[agentId]?.status = .running
+            guard var agent = agents[agentId] else { break }
+
+            let previousStatus = agent.status
+            agent.recordHeartbeat(at: nowProvider())
+            agents[agentId] = agent
+            stallAlertedAgentIDs.remove(agentId)
+
+            let ackedIds: [UUID]
+            if previousStatus == .stalled || previousStatus == .expired {
+                ackedIds = acknowledgeRecoveredAgentEvents(
+                    agentId: agentId,
+                    eventTypes: [.stalledOrWaiting]
+                )
+            } else {
+                ackedIds = []
             }
             saveAgents()
+            if !ackedIds.isEmpty {
+                persistEventsSnapshot()
+            }
+            await broadcast(.heartbeat(agentId: agentId))
+            for eventId in ackedIds {
+                await broadcast(.ack(messageId: eventId))
+            }
+
+        case .resume(let agentId):
+            guard var agent = agents[agentId] else { break }
+            guard agent.status == .waiting || agent.status == .stalled || agent.status == .expired else { break }
+
+            agent.recordResume(at: nowProvider())
+            agents[agentId] = agent
+            stallAlertedAgentIDs.remove(agentId)
+
+            let ackedIds = acknowledgeRecoveredAgentEvents(
+                agentId: agentId,
+                eventTypes: [.stalledOrWaiting, .inputRequested, .permissionRequested]
+            )
+            saveAgents()
+            if !ackedIds.isEmpty {
+                persistEventsSnapshot()
+            }
+            await broadcast(.resume(agentId: agentId))
+            for eventId in ackedIds {
+                await broadcast(.ack(messageId: eventId))
+            }
 
         case .event(let event):
             guard shouldAccept(event: event) else { return }
@@ -299,17 +349,9 @@ actor MonitorState {
     }
 
     private func apply(event: AgentEvent) {
-        switch event.eventType {
-        case .permissionRequested, .inputRequested:
-            agents[event.agentId]?.status = .waiting
-        case .taskCompleted:
-            agents[event.agentId]?.status = .running
-        case .errorDetected:
-            agents[event.agentId]?.status = .errored
-        case .stalledOrWaiting:
-            agents[event.agentId]?.status = .stalled
-        }
-        agents[event.agentId]?.lastActiveAt = event.timestamp
+        guard var agent = agents[event.agentId] else { return }
+        agent.apply(event: event)
+        agents[event.agentId] = agent
         saveAgents()
     }
 
@@ -427,6 +469,18 @@ actor MonitorState {
         return acked
     }
 
+    private func acknowledgeRecoveredAgentEvents(agentId: UUID, eventTypes: Set<EventType>) -> [UUID] {
+        var acked: [UUID] = []
+        for index in events.indices {
+            guard events[index].agentId == agentId else { continue }
+            guard !events[index].acknowledged else { continue }
+            guard eventTypes.contains(events[index].eventType) else { continue }
+            events[index].acknowledged = true
+            acked.append(events[index].id)
+        }
+        return acked
+    }
+
     private func persistEventsSnapshot() {
         trimEventsIfNeeded()
         try? eventStore.rewrite(events)
@@ -447,7 +501,7 @@ actor MonitorState {
     }
 
     private func saveAgents() {
-        Self.persistAgents(agents)
+        persistAgentsHandler(agents)
     }
 
     private func performMaintenance(_ action: MaintenanceAction) throws {

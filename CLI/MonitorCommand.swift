@@ -86,6 +86,7 @@ struct MonitorCommand: ParsableCommand {
             while true {
                 let n = Foundation.read(FileHandle.standardInput.fileDescriptor, buf, bufSize)
                 guard n > 0 else { break }
+                try? ipcClient?.send(.resume(agentId: id))
                 pty.write(Data(bytes: buf, count: n))
             }
         }

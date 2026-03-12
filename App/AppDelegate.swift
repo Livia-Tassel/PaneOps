@@ -63,6 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .heartbeat(let agentId):
             agentRegistry.heartbeat(agentId: agentId)
 
+        case .resume(let agentId):
+            agentRegistry.resume(agentId: agentId)
+
         case .configUpdate(let config):
             agentRegistry.config = config
             syncOverlayFromRegistry()

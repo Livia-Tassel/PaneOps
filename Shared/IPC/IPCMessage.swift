@@ -33,6 +33,7 @@ public enum IPCMessage: Codable, Sendable {
     case event(AgentEvent)
     case deregister(agentId: UUID, exitCode: Int32)
     case heartbeat(agentId: UUID)
+    case resume(agentId: UUID)
     case subscribe(SubscribeRequest)
     case snapshot(MonitorSnapshot)
     case ack(messageId: UUID)
@@ -49,6 +50,7 @@ public enum IPCMessage: Codable, Sendable {
         case event
         case deregister
         case heartbeat
+        case resume
         case subscribe
         case snapshot
         case ack
@@ -70,6 +72,9 @@ public enum IPCMessage: Codable, Sendable {
             try container.encode(DeregisterPayload(agentId: agentId, exitCode: exitCode), forKey: .payload)
         case .heartbeat(let agentId):
             try container.encode(MessageType.heartbeat, forKey: .type)
+            try container.encode(HeartbeatPayload(agentId: agentId), forKey: .payload)
+        case .resume(let agentId):
+            try container.encode(MessageType.resume, forKey: .type)
             try container.encode(HeartbeatPayload(agentId: agentId), forKey: .payload)
         case .subscribe(let request):
             try container.encode(MessageType.subscribe, forKey: .type)
@@ -103,6 +108,9 @@ public enum IPCMessage: Codable, Sendable {
         case .heartbeat:
             let payload = try container.decode(HeartbeatPayload.self, forKey: .payload)
             self = .heartbeat(agentId: payload.agentId)
+        case .resume:
+            let payload = try container.decode(HeartbeatPayload.self, forKey: .payload)
+            self = .resume(agentId: payload.agentId)
         case .subscribe:
             self = .subscribe(try container.decode(SubscribeRequest.self, forKey: .payload))
         case .snapshot:

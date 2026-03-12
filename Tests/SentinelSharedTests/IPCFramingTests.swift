@@ -78,6 +78,20 @@ final class IPCFramingTests: XCTestCase {
         }
     }
 
+    func testRoundtripResume() throws {
+        let agentId = UUID()
+        let message = IPCMessage.resume(agentId: agentId)
+
+        let encoded = try IPCFraming.encode(message)
+        let (decoded, _) = try XCTUnwrap(IPCFraming.decode(from: encoded))
+
+        if case .resume(let id) = decoded {
+            XCTAssertEqual(id, agentId)
+        } else {
+            XCTFail("Expected resume message")
+        }
+    }
+
     func testRoundtripAck() throws {
         let msgId = UUID()
         let message = IPCMessage.ack(messageId: msgId)
