@@ -17,6 +17,12 @@ public final class OutputProcessor: @unchecked Sendable {
     private let suppressInteractiveUntilFirstInput: Bool
     private let promptCompletionQuietPeriod: TimeInterval
     private let codexCompletionQuietPeriod: TimeInterval
+    private let claudeFallbackCompletionMinimumDelay: TimeInterval = 0.9
+    private let claudeStatusSymbols: Set<Character> = Set("✢✣✤✥✦✧✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿❇")
+    private let promptSymbols: Set<Character> = Set("❯❱›>")
+    private let embeddedPromptSymbols: Set<Character> = Set("❯❱›")
+    private let promptTrailingCursorGlyphs: Set<Character> = Set("▎▍▌▋▊▉█")
+    private let promptIgnorableScalars = CharacterSet(charactersIn: "\u{FE0E}\u{FE0F}\u{200B}\u{200C}\u{200D}\u{2060}")
     private var pendingUTF8Bytes = Data()
 
     // Rate limiting
@@ -40,6 +46,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private var hasEmittedCompletionSinceLastUserInput = false
     private var latestCompletionSummary = ""
     private var hasSeenClaudeAssistantOutputSinceLastUserInput = false
+    private var hasSeenClaudePromptReadySinceLastUserInput = false
     private var claudePromptCompletionTimer: Task<Void, Never>?
     private var hasSeenCodexAssistantOutputSinceLastUserInput = false
     private var latestCodexAssistantSummary = ""
@@ -165,6 +172,7 @@ public final class OutputProcessor: @unchecked Sendable {
         hasEmittedCompletionSinceLastUserInput = false
         latestCompletionSummary = ""
         hasSeenClaudeAssistantOutputSinceLastUserInput = false
+        hasSeenClaudePromptReadySinceLastUserInput = false
         claudePromptCompletionTimer?.cancel()
         hasSeenCodexAssistantOutputSinceLastUserInput = false
         latestCodexAssistantSummary = ""
@@ -178,10 +186,16 @@ public final class OutputProcessor: @unchecked Sendable {
     // MARK: - Private
 
     private func processLine(_ rawLine: String) {
-        let stripped = stripper.strip(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+        let stripped = normalizedLineForMatching(stripper.strip(rawLine))
         guard !stripped.isEmpty else { return }
 
         if isLikelyLocalInputEcho(stripped) { return }
+        let embeddedPrompt = embeddedPromptSplit(from: stripped)
+        let observationLine = embeddedPrompt?.prefix ?? stripped
+        if embeddedPrompt != nil {
+            observeCompletionSummary(line: observationLine, matchedEventType: nil)
+        }
+        let lineForMatch = embeddedPrompt?.prompt ?? stripped
 
         // Debug: log all stripped lines to file
         if debugMode, let fh = debugFile {
@@ -189,18 +203,18 @@ public final class OutputProcessor: @unchecked Sendable {
             fh.write(logLine.data(using: .utf8)!)
         }
 
-        let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId)
+        let match = ruleEngine.match(line: lineForMatch, agentType: agentType, agentId: agentId)
         if let match {
             if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
-            if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
-            if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
-            if shouldHandleDeferredPromptCompletion(match, summary: stripped) { return }
-            guard !shouldSuppressRepeatedLine(stripped) else { return }
-            emitMatchedEvent(match, summary: stripped)
+            if shouldSuppressCompletionForTurnState(match, summary: lineForMatch) { return }
+            if shouldSuppressLikelyMetaOrControlLine(lineForMatch, eventType: match.rule.eventType) { return }
+            if shouldHandleDeferredPromptCompletion(match, summary: lineForMatch) { return }
+            guard !shouldSuppressRepeatedLine(lineForMatch) else { return }
+            emitMatchedEvent(match, summary: lineForMatch)
         }
 
-        observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
-        observeCompletionSummary(line: stripped, matchedEventType: match?.rule.eventType)
+        observeCodexCompletionActivity(line: observationLine, matchedEventType: match?.rule.eventType)
+        observeCompletionSummary(line: observationLine, matchedEventType: match?.rule.eventType)
     }
 
     private func resetStallTimer() {
@@ -255,43 +269,56 @@ public final class OutputProcessor: @unchecked Sendable {
     }
 
     private func processBufferedCandidate() {
-        let stripped = stripper.strip(lineBuffer).trimmingCharacters(in: .whitespacesAndNewlines)
+        let stripped = normalizedLineForMatching(stripper.strip(lineBuffer))
         guard !stripped.isEmpty else { return }
         if isLikelyLocalInputEcho(stripped) {
             lineBuffer = ""
             return
         }
-        guard stripped.count <= 120 else { return }
+        let embeddedPrompt = embeddedPromptSplit(from: stripped)
+        let observationLine = embeddedPrompt?.prefix ?? stripped
+        if embeddedPrompt != nil {
+            observeCompletionSummary(line: observationLine, matchedEventType: nil)
+        }
+        let candidateForMatch: String
+        if let embeddedPrompt {
+            candidateForMatch = embeddedPrompt.prompt
+        } else if stripped.count > 120 {
+            guard let promptTail = promptTailCandidate(from: stripped) else { return }
+            candidateForMatch = promptTail
+        } else {
+            candidateForMatch = stripped
+        }
 
-        let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId)
+        let match = ruleEngine.match(line: candidateForMatch, agentType: agentType, agentId: agentId)
         if let match,
            match.rule.eventType == .inputRequested
             || match.rule.eventType == .permissionRequested
             || match.rule.eventType == .taskCompleted
         {
             if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) {
-                consumeBufferedPromptIfNeeded(stripped)
+                consumeBufferedPromptIfNeeded(candidateForMatch)
                 return
             }
-            if shouldSuppressCompletionForTurnState(match, summary: stripped) {
-                consumeBufferedPromptIfNeeded(stripped)
+            if shouldSuppressCompletionForTurnState(match, summary: candidateForMatch) {
+                consumeBufferedPromptIfNeeded(candidateForMatch)
                 return
             }
-            if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
-            if shouldHandleDeferredPromptCompletion(match, summary: stripped) {
-                consumeBufferedPromptIfNeeded(stripped)
+            if shouldSuppressLikelyMetaOrControlLine(candidateForMatch, eventType: match.rule.eventType) { return }
+            if shouldHandleDeferredPromptCompletion(match, summary: candidateForMatch) {
+                consumeBufferedPromptIfNeeded(candidateForMatch)
                 return
             }
-            if shouldSuppressRepeatedLine(stripped) {
-                consumeBufferedPromptIfNeeded(stripped)
+            if shouldSuppressRepeatedLine(candidateForMatch) {
+                consumeBufferedPromptIfNeeded(candidateForMatch)
                 return
             }
-            emitMatchedEvent(match, summary: stripped)
-            consumeBufferedPromptIfNeeded(stripped)
+            emitMatchedEvent(match, summary: candidateForMatch)
+            consumeBufferedPromptIfNeeded(candidateForMatch)
         }
 
-        observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
-        observeCompletionSummary(line: stripped, matchedEventType: match?.rule.eventType)
+        observeCodexCompletionActivity(line: observationLine, matchedEventType: match?.rule.eventType)
+        observeCompletionSummary(line: observationLine, matchedEventType: match?.rule.eventType)
     }
 
     private func decodeUTF8Text(from data: Data) -> (String, Data) {
@@ -327,6 +354,7 @@ public final class OutputProcessor: @unchecked Sendable {
         let eventSummary = resolvedEventSummary(for: match, originalSummary: summary)
         if match.rule.eventType == .taskCompleted {
             hasEmittedCompletionSinceLastUserInput = true
+            hasSeenClaudePromptReadySinceLastUserInput = false
             claudePromptCompletionTimer?.cancel()
             codexCompletionTimer?.cancel()
         }
@@ -460,7 +488,57 @@ public final class OutputProcessor: @unchecked Sendable {
     }
 
     private func isPromptLikeLine(_ line: String) -> Bool {
-        line.range(of: #"^\s*[❯›>](?:\s+\S.*)?$"#, options: .regularExpression) != nil
+        let normalized = normalizedLineForMatching(line)
+        return normalized.range(of: #"^\s*[❯❱›>](?:\s+\S.*)?$"#, options: .regularExpression) != nil
+    }
+
+    private func normalizedLineForMatching(_ line: String) -> String {
+        var normalizedScalars: [UnicodeScalar] = []
+        normalizedScalars.reserveCapacity(line.unicodeScalars.count)
+        for scalar in line.unicodeScalars where !promptIgnorableScalars.contains(scalar) {
+            if scalar == "\u{00A0}" || scalar == "\u{202F}" {
+                normalizedScalars.append(" ")
+            } else {
+                normalizedScalars.append(scalar)
+            }
+        }
+
+        var normalized = String(String.UnicodeScalarView(normalizedScalars))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = normalized.last, promptTrailingCursorGlyphs.contains(last) {
+            normalized.removeLast()
+            normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return normalized
+    }
+
+    private func promptTailCandidate(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last, promptSymbols.contains(last) else { return nil }
+
+        let prefix = String(trimmed.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        if prefix.isEmpty || isLikelySeparatorLine(prefix) {
+            return String(last)
+        }
+
+        if prefix.range(of: #"[-_=~─━═]{3,}\s*$"#, options: .regularExpression) != nil {
+            return String(last)
+        }
+
+        return nil
+    }
+
+    private func embeddedPromptSplit(from line: String) -> (prompt: String, prefix: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let promptIndex = trimmed.lastIndex(where: { embeddedPromptSymbols.contains($0) }) else { return nil }
+
+        let prompt = String(trimmed[promptIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isPromptLikeLine(prompt) else { return nil }
+
+        let prefix = String(trimmed[..<promptIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return nil }
+        return (prompt, prefix)
     }
 
     private func observeCompletionSummary(line: String, matchedEventType: EventType?) {
@@ -470,6 +548,7 @@ public final class OutputProcessor: @unchecked Sendable {
         guard !isLikelySeparatorLine(normalizedLine) else { return }
         guard !isLikelyControlSequenceResidue(normalizedLine) else { return }
         guard !isLikelyClaudeStatusLine(normalizedLine) else { return }
+        guard !isLikelyClaudeChromeLine(normalizedLine) else { return }
 
         switch matchedEventType {
         case .taskCompleted?, .inputRequested?, .permissionRequested?:
@@ -484,9 +563,13 @@ public final class OutputProcessor: @unchecked Sendable {
 
         let candidate = summaryCandidate(from: normalizedLine)
         guard !candidate.isEmpty else { return }
+        if agentType == .claude, isLikelyLowSignalClaudeSummary(candidate) { return }
         latestCompletionSummary = candidate
         if agentType == .claude, lastUserInputAt != nil {
             hasSeenClaudeAssistantOutputSinceLastUserInput = true
+            if hasSeenClaudePromptReadySinceLastUserInput {
+                hasSeenClaudePromptReadySinceLastUserInput = false
+            }
             claudePromptCompletionTimer?.cancel()
         }
     }
@@ -494,8 +577,13 @@ public final class OutputProcessor: @unchecked Sendable {
     private func resolvedEventSummary(for match: RuleEngine.MatchResult, originalSummary: String) -> String {
         guard match.rule.eventType == .taskCompleted else { return originalSummary }
         guard isPromptLikeLine(originalSummary) else { return originalSummary }
-        guard !latestCompletionSummary.isEmpty else { return originalSummary }
-        return latestCompletionSummary
+        switch agentType {
+        case .claude:
+            return trustedClaudeCompletionSummary() ?? fallbackClaudeCompletionSummary()
+        default:
+            guard !latestCompletionSummary.isEmpty else { return originalSummary }
+            return latestCompletionSummary
+        }
     }
 
     private func normalizedCompletionSummaryLine(from line: String) -> String {
@@ -521,10 +609,38 @@ public final class OutputProcessor: @unchecked Sendable {
 
     private func isLikelyClaudeStatusLine(_ line: String) -> Bool {
         guard agentType == .claude else { return false }
-        return line.range(
-            of: #"^\s*[✢✣✤✥✦✧✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿❇]\s*[A-Za-z][A-Za-z\s-]*(?:…|\.{3})(?:\s*\([^)]*\))?\s*$"#,
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 160 else { return false }
+        guard let first = trimmed.first, claudeStatusSymbols.contains(first) else { return false }
+
+        let body = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return false }
+        let lowered = body.lowercased()
+
+        let statusKeywords = [
+            "thinking", "working", "analyzing", "analysing", "processing",
+            "stewing", "lollygagging", "pondering", "reflecting",
+            "思考", "分析", "处理中", "推理", "规划",
+        ]
+        if statusKeywords.contains(where: { lowered.contains($0) }) {
+            return true
+        }
+
+        if body.range(
+            of: #"^[A-Za-z][A-Za-z0-9\s\-]*(?:…|\.{3})(?:\s*\([^)]*\))?\s*$"#,
             options: .regularExpression
-        ) != nil
+        ) != nil {
+            return true
+        }
+
+        if body.range(
+            of: #"^[A-Za-z][A-Za-z0-9\s\-]{0,42}(?:\s*\([^)]*\))?\s*$"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
     }
 
     private func observeCodexCompletionActivity(line: String, matchedEventType: EventType?) {
@@ -568,19 +684,23 @@ public final class OutputProcessor: @unchecked Sendable {
     private func scheduleClaudePromptCompletion(rule: Rule) {
         guard agentType == .claude else { return }
         guard lastUserInputAt != nil else { return }
-        guard hasSeenClaudeAssistantOutputSinceLastUserInput else { return }
         guard !hasEmittedCompletionSinceLastUserInput else { return }
+
+        hasSeenClaudePromptReadySinceLastUserInput = true
+        let delay: TimeInterval = hasSeenClaudeAssistantOutputSinceLastUserInput
+            ? promptCompletionQuietPeriod
+            : max(promptCompletionQuietPeriod * 3, claudeFallbackCompletionMinimumDelay)
 
         claudePromptCompletionTimer?.cancel()
         claudePromptCompletionTimer = Task.detached { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(self.promptCompletionQuietPeriod * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             guard !self.hasEmittedCompletionSinceLastUserInput else { return }
-            guard self.hasSeenClaudeAssistantOutputSinceLastUserInput else { return }
 
             self.hasEmittedCompletionSinceLastUserInput = true
-            let summary = self.latestCompletionSummary.isEmpty ? "❯" : self.latestCompletionSummary
+            self.hasSeenClaudePromptReadySinceLastUserInput = false
+            let summary = self.trustedClaudeCompletionSummary() ?? self.fallbackClaudeCompletionSummary()
 
             let event = AgentEvent(
                 agentId: self.agentId,
@@ -598,6 +718,59 @@ public final class OutputProcessor: @unchecked Sendable {
             )
             self.onEvent(event)
         }
+    }
+
+    private func isLikelyClaudeChromeLine(_ line: String) -> Bool {
+        guard agentType == .claude else { return false }
+        let lowered = line.lowercased()
+        if lowered.contains("ctrl+g toedit") || lowered.contains("ctrl+g to edit") {
+            return true
+        }
+        if lowered.contains("press ctrl-c again to exit") {
+            return true
+        }
+        if lowered.range(of: #"^\s*try\s+"#, options: .regularExpression) != nil {
+            return true
+        }
+        let pipeCount = line.reduce(into: 0) { count, character in
+            if character == "|" { count += 1 }
+        }
+        if pipeCount >= 3 && (lowered.contains("sonnet") || lowered.contains("ctx:") || lowered.contains("master")) {
+            return true
+        }
+        return false
+    }
+
+    private func trustedClaudeCompletionSummary() -> String? {
+        guard agentType == .claude else { return nil }
+        let candidate = latestCompletionSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return nil }
+        guard !isLikelyClaudeStatusLine(candidate) else { return nil }
+        guard !isLikelyLowSignalClaudeSummary(candidate) else { return nil }
+        return candidate
+    }
+
+    private func fallbackClaudeCompletionSummary() -> String {
+        "Response completed"
+    }
+
+    private func isLikelyLowSignalClaudeSummary(_ line: String) -> Bool {
+        guard agentType == .claude else { return false }
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        if isLikelySeparatorLine(trimmed) { return true }
+
+        let withoutPrefix = trimmed.replacingOccurrences(
+            of: #"(?i)^\s*response completed:\s*"#,
+            with: "",
+            options: .regularExpression
+        )
+        if isLikelySeparatorLine(withoutPrefix) { return true }
+
+        let scalarSet = CharacterSet(charactersIn: "-_=~─━═·• ")
+        let nonWhitespaceScalars = withoutPrefix.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
+        guard !nonWhitespaceScalars.isEmpty else { return true }
+        return nonWhitespaceScalars.allSatisfy { scalarSet.contains($0) }
     }
 
     private func scheduleCodexQuietCompletion() {

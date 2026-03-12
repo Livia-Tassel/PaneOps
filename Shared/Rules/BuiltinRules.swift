@@ -9,14 +9,14 @@ public enum BuiltinRules {
     // MARK: - Claude Code
 
     public static let claude: [Rule] = [
-        // The ❯ prompt on its own line means Claude completed the current turn.
+        // A prompt marker on its own line means Claude completed the current turn.
         Rule(
             id: UUID(uuidString: "00000001-0001-0001-0001-000000000006")!,
             name: "Claude: Prompt ready (❯)",
             agentType: .claude,
             patterns: [
-                RulePattern(kind: .regex, value: "^❯\\s*$"),
-                RulePattern(kind: .regex, value: "^\\s*❯\\s*$"),
+                RulePattern(kind: .regex, value: "^\\s*[❯❱›>]\\s*$"),
+                RulePattern(kind: .regex, value: "^\\s*[❯❱›]\\s+\\S.*$"),
             ],
             eventType: .taskCompleted,
             priority: .normal,
@@ -103,6 +103,7 @@ public enum BuiltinRules {
             agentType: .codex,
             patterns: [
                 RulePattern(kind: .regex, value: "^\\s*[❯›>]\\s*$"),
+                RulePattern(kind: .regex, value: "^\\s*[❱]\\s*$"),
                 RulePattern(kind: .regex, value: "^\\s*[❯›]\\s+\\S.*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed( successfully)?\\.?\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*all done\\.?\\s*$"),
@@ -151,6 +152,7 @@ public enum BuiltinRules {
             agentType: .gemini,
             patterns: [
                 RulePattern(kind: .regex, value: "^\\s*[❯›>]\\s*$"),
+                RulePattern(kind: .regex, value: "^\\s*[❱]\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*done\\.?\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*finished\\.?\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed\\.?\\s*$"),

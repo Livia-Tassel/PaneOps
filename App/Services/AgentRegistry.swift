@@ -11,7 +11,8 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
     var monitorConnected: Bool = false
 
     var activeAgents: [AgentInstance] {
-        agents.values
+        deduplicateAgentsByPane(
+            agents.values
             .filter { $0.status == .running || $0.status == .waiting || $0.status == .stalled }
             .sorted {
                 if $0.lastActiveAt == $1.lastActiveAt {
@@ -19,6 +20,7 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
                 }
                 return $0.lastActiveAt > $1.lastActiveAt
             }
+        )
     }
 
     var allAgents: [AgentInstance] {
@@ -155,5 +157,26 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
             }
             return event.id
         }
+    }
+
+    private func deduplicateAgentsByPane(_ candidates: [AgentInstance]) -> [AgentInstance] {
+        var seen: Set<String> = []
+        var deduped: [AgentInstance] = []
+        for agent in candidates {
+            let key = paneDedupKey(for: agent)
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            deduped.append(agent)
+        }
+        return deduped
+    }
+
+    private func paneDedupKey(for agent: AgentInstance) -> String {
+        if !agent.paneId.isEmpty {
+            return "pane:\(agent.paneId)"
+        }
+        return "id:\(agent.id.uuidString)"
     }
 }

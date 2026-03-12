@@ -1,5 +1,6 @@
 import Foundation
 import SentinelShared
+import Darwin
 
 enum MonitorLaunchMode: Equatable {
     case run
@@ -10,6 +11,7 @@ enum MonitorLaunchMode: Equatable {
 @main
 struct SentinelMonitorMain {
     static let version = SentinelVersion.current
+    private static var instanceLockFD: Int32 = -1
 
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
@@ -62,6 +64,13 @@ struct SentinelMonitorMain {
             Darwin.exit(1)
         }
 
+        do {
+            instanceLockFD = try acquireInstanceLock()
+        } catch {
+            fputs("sentinel-monitor: \(error.localizedDescription)\n", stderr)
+            Darwin.exit(1)
+        }
+
         let state = MonitorState()
         let server = IPCServer(
             socketPath: AppConfig.socketPath,
@@ -91,6 +100,36 @@ struct SentinelMonitorMain {
             fputs("sentinel-monitor: server error: \(error)\n", stderr)
             Darwin.exit(1)
         }
+    }
+
+    private static func acquireInstanceLock() throws -> Int32 {
+        let lockPath = AppConfig.baseDirectory.appendingPathComponent("monitor.lock").path
+        let fd = open(lockPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard fd >= 0 else {
+            throw NSError(
+                domain: "SentinelMonitorLock",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "failed to open monitor lock file"]
+            )
+        }
+
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            let lockErrno = errno
+            close(fd)
+            if lockErrno == EWOULDBLOCK || lockErrno == EAGAIN {
+                throw NSError(
+                    domain: "SentinelMonitorLock",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "another sentinel-monitor instance is already running"]
+                )
+            }
+            throw NSError(
+                domain: "SentinelMonitorLock",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "failed to lock monitor instance file (\(lockErrno))"]
+            )
+        }
+        return fd
     }
 
     private static func printHelp() {

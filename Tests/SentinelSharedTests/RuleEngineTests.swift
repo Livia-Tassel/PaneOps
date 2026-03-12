@@ -184,4 +184,36 @@ final class RuleEngineTests: XCTestCase {
         let match = engine.match(line: "> quoted text", agentType: .codex, agentId: agentId)
         XCTAssertTrue(match == nil || match?.rule.eventType != .taskCompleted)
     }
+
+    func testClaudeCompletedRuleMatchesChevronPrompt() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "›", agentType: .claude, agentId: agentId)
+        XCTAssertEqual(match?.rule.eventType, .taskCompleted)
+    }
+
+    func testClaudeCompletedRuleMatchesHeavyChevronPrompt() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "❱", agentType: .claude, agentId: agentId)
+        XCTAssertEqual(match?.rule.eventType, .taskCompleted)
+    }
+
+    func testClaudeCompletedRuleMatchesInlinePromptSuggestion() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "❯\u{00A0}Try \"refactor RunCommand.swift\"", agentType: .claude, agentId: agentId)
+        XCTAssertEqual(match?.rule.eventType, .taskCompleted)
+    }
+
+    func testClaudeCompletedRuleDoesNotMatchMarkdownQuoteLine() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "> quoted text", agentType: .claude, agentId: agentId)
+        XCTAssertTrue(match == nil || match?.rule.eventType != .taskCompleted)
+    }
 }

@@ -495,6 +495,195 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.summary, "Hello.")
     }
 
+    func testClaudePromptCompletionSupportsChevronVariantPrompt() {
+        let expectation = XCTestExpectation(description: "Claude completion supports › prompt")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-chevron",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello from chevron prompt.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("›\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello from chevron prompt.")
+    }
+
+    func testClaudePromptCompletionSupportsHeavyChevronVariantPrompt() {
+        let expectation = XCTestExpectation(description: "Claude completion supports ❱ prompt")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-heavy-chevron",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello from heavy chevron prompt.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("❱\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello from heavy chevron prompt.")
+    }
+
+    func testClaudePromptCompletionSupportsPromptWithCursorGlyph() {
+        let expectation = XCTestExpectation(description: "Claude completion supports prompt with cursor glyph")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-cursor-glyph",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello from cursor prompt.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("❯ █".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello from cursor prompt.")
+    }
+
+    func testClaudePromptCompletionSupportsInlinePromptSuggestionWithNBSP() {
+        let expectation = XCTestExpectation(description: "Claude completion supports inline suggestion prompt with NBSP")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-inline-suggestion",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello from inline suggestion prompt.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("❯\u{00A0}Try \"refactor RunCommand.swift\"".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello from inline suggestion prompt.")
+    }
+
+    func testClaudePromptCompletionSupportsEmbeddedPromptOnSingleRenderedLine() {
+        let expectation = XCTestExpectation(description: "Claude completion supports embedded prompt on single rendered line")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-embedded-prompt",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("● Hello! How can I help you with PaneOps today? ❯".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.6)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "● Hello! How can I help you with PaneOps today?")
+    }
+
+    func testClaudePromptCompletionIsNotCancelledByPostPromptStatusLine() {
+        let expectation = XCTestExpectation(description: "Claude completion survives post-prompt status churn")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-status-churn",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello from status churn.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("❯\u{00A0}Try \"refactor RunCommand.swift\"\n".data(using: .utf8)!)
+        processor.processData("tassel | .../Documents/Project/PaneOps | master* | Sonnet 4.6 | ♥ 19:06\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello from status churn.")
+    }
+
+    func testClaudePromptCompletionDetectsPromptTailFromLongBufferedLine() {
+        let expectation = XCTestExpectation(description: "Claude completion matches long buffered separator+prompt tail")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-long-buffer",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello from long buffer prompt.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        let longTail = String(repeating: "─", count: 140) + "❯"
+        processor.processData(longTail.data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello from long buffer prompt.")
+    }
+
     func testClaudeThinkingStatusDoesNotTriggerCompletionBeforeRealAnswer() {
         let expectation = XCTestExpectation(description: "Claude completion waits for real answer after thinking status")
         let events = LockedBox<[AgentEvent]>([])
@@ -586,6 +775,63 @@ final class OutputProcessorTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(events.value.count, 1)
         XCTAssertEqual(events.value.first?.summary, "Still working.")
+    }
+
+    func testClaudePromptCompletionFallsBackWhenSummaryUnavailable() {
+        let expectation = XCTestExpectation(description: "Claude completion falls back without reliable summary")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-fallback",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            if event.eventType == .taskCompleted {
+                expectation.fulfill()
+            }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("✳ Stewing (33s · ↓302 tokens)\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.45)
+        processor.processData("❯\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 2.0)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.summary, "Response completed")
+    }
+
+    func testClaudeStatusLineWithTokenSuffixDoesNotReplaceAnswerSummary() {
+        let expectation = XCTestExpectation(description: "Claude status line with tokens is ignored as summary")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-status-token",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            if event.eventType == .taskCompleted {
+                expectation.fulfill()
+            }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("✳ Stewing… (33s · ↓302 tokens)\n".data(using: .utf8)!)
+        processor.processData("Actual answer line.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("❯\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.2)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.summary, "Actual answer line.")
     }
 
     func testCodexQuietCompletionAfterAssistantOutputSilence() {

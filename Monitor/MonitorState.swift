@@ -7,6 +7,7 @@ actor MonitorState {
     private var events: [AgentEvent]
     private var dedupeSeenAt: [String: Date] = [:]
     private var stallAlertedAgentIDs: Set<UUID> = []
+    private var paneSupersededAgentIDs: Set<UUID> = []
     private var subscribers: [UUID: IPCServer.ClientConnection] = [:]
 
     private let tmux: TmuxClient
@@ -110,16 +111,32 @@ actor MonitorState {
             }
 
         case .register(let agent):
+            let now = nowProvider()
             var updated = agent
-            updated.lastActiveAt = nowProvider()
+            updated.lastActiveAt = now
             updated.status = .running
+
+            let collapsed = collapseActiveAgentsSharingPane(with: updated, now: now)
             agents[agent.id] = updated
             stallAlertedAgentIDs.remove(agent.id)
+            paneSupersededAgentIDs.remove(agent.id)
+            trimEventsIfNeeded()
             saveAgents()
+
+            if !collapsed.generatedEvents.isEmpty || !collapsed.ackedEventIDs.isEmpty {
+                persistEventsSnapshot()
+            }
+            for event in collapsed.generatedEvents {
+                await broadcast(.event(event))
+            }
+            for eventId in collapsed.ackedEventIDs {
+                await broadcast(.ack(messageId: eventId))
+            }
             await broadcast(.register(updated))
 
         case .heartbeat(let agentId):
             guard var agent = agents[agentId] else { break }
+            guard !paneSupersededAgentIDs.contains(agentId) else { break }
 
             agent.recordHeartbeat(at: nowProvider())
             agents[agentId] = agent
@@ -128,6 +145,7 @@ actor MonitorState {
 
         case .activity(let agentId):
             guard var agent = agents[agentId] else { break }
+            guard !paneSupersededAgentIDs.contains(agentId) else { break }
 
             let previousStatus = agent.status
             agent.recordOutputActivity(at: nowProvider())
@@ -151,6 +169,7 @@ actor MonitorState {
 
         case .resume(let agentId):
             guard var agent = agents[agentId] else { break }
+            guard !paneSupersededAgentIDs.contains(agentId) else { break }
             guard agent.status == .waiting || agent.status == .stalled || agent.status == .expired else { break }
 
             agent.recordResume(at: nowProvider())
@@ -171,6 +190,7 @@ actor MonitorState {
             }
 
         case .event(let event):
+            guard !paneSupersededAgentIDs.contains(event.agentId) else { return }
             guard shouldAccept(event: event) else { return }
 
             var accepted = event
@@ -188,7 +208,11 @@ actor MonitorState {
 
         case .deregister(let agentId, let exitCode):
             let now = nowProvider()
-            if exitCode == 0, shouldEmitSyntheticCompletion(for: agentId, now: now), let agent = agents[agentId] {
+            if exitCode == 0,
+               !paneSupersededAgentIDs.contains(agentId),
+               shouldEmitSyntheticCompletion(for: agentId, now: now),
+               let agent = agents[agentId]
+            {
                 var completionEvent = AgentEvent(
                     agentId: agent.id,
                     agentType: agent.agentType,
@@ -221,6 +245,7 @@ actor MonitorState {
                 agents[agentId]?.lastActiveAt = now
             }
             stallAlertedAgentIDs.remove(agentId)
+            paneSupersededAgentIDs.remove(agentId)
             let ackedIds = acknowledgeEndedAgentEvents(agentId: agentId)
             saveAgents()
             if !ackedIds.isEmpty {
@@ -353,6 +378,39 @@ actor MonitorState {
         return "\(event.agentId.uuidString)|\(event.eventType.rawValue)|\(pane)|\(canonicalSummary)"
     }
 
+    private func collapseActiveAgentsSharingPane(with incoming: AgentInstance, now: Date) -> (generatedEvents: [AgentEvent], ackedEventIDs: [UUID]) {
+        guard !incoming.paneId.isEmpty else { return ([], []) }
+
+        var generatedEvents: [AgentEvent] = []
+        var ackedEventIDs: [UUID] = []
+        let candidates = agents.values
+            .filter { candidate in
+                candidate.id != incoming.id
+                    && candidate.status.isActive
+                    && !candidate.paneId.isEmpty
+                    && candidate.paneId == incoming.paneId
+            }
+            .sorted { $0.startedAt > $1.startedAt }
+
+        for candidate in candidates {
+            agents[candidate.id]?.status = .expired
+            agents[candidate.id]?.lastActiveAt = now
+            stallAlertedAgentIDs.remove(candidate.id)
+            paneSupersededAgentIDs.insert(candidate.id)
+
+            var replacementEvent = Self.makePaneReplacementEvent(for: candidate, replacement: incoming, at: now)
+            if shouldAccept(event: replacementEvent) {
+                replacementEvent.acknowledged = true
+                events.append(replacementEvent)
+                generatedEvents.append(replacementEvent)
+                try? eventStore.append(replacementEvent)
+            }
+            ackedEventIDs.append(contentsOf: acknowledgeEndedAgentEvents(agentId: candidate.id))
+        }
+
+        return (generatedEvents, ackedEventIDs)
+    }
+
     private func apply(event: AgentEvent) {
         guard var agent = agents[event.agentId] else { return }
         agent.apply(event: event)
@@ -402,6 +460,25 @@ actor MonitorState {
             priority: .normal,
             shouldNotify: false,
             dedupeKey: "\(agent.id.uuidString)|expired|\(reason.rawValue)",
+            timestamp: now,
+            paneId: agent.paneId,
+            windowId: agent.windowId,
+            sessionName: agent.sessionName,
+            acknowledged: true
+        )
+    }
+
+    private static func makePaneReplacementEvent(for agent: AgentInstance, replacement: AgentInstance, at now: Date) -> AgentEvent {
+        AgentEvent(
+            agentId: agent.id,
+            agentType: agent.agentType,
+            displayLabel: agent.displayLabel,
+            eventType: .stalledOrWaiting,
+            summary: "Agent expired: superseded by newer registration on pane \(agent.paneId)",
+            matchedRule: "monitor-expire-paneReplaced",
+            priority: .normal,
+            shouldNotify: false,
+            dedupeKey: "\(agent.id.uuidString)|expired|paneReplaced|\(replacement.id.uuidString)",
             timestamp: now,
             paneId: agent.paneId,
             windowId: agent.windowId,

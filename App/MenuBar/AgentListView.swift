@@ -35,9 +35,11 @@ struct AgentListView: View {
                         }
                     }
 
-                    let inactive = registry.allAgents.filter {
-                        $0.status == .completed || $0.status == .errored || $0.status == .expired
-                    }
+                    let inactive = deduplicateByPane(
+                        registry.allAgents.filter {
+                            $0.status == .completed || $0.status == .errored || $0.status == .expired
+                        }
+                    )
                     if !inactive.isEmpty {
                         Divider()
                             .padding(.vertical, 4)
@@ -57,5 +59,19 @@ struct AgentListView: View {
                 .padding(.vertical, 4)
             }
         }
+    }
+
+    private func deduplicateByPane(_ candidates: [AgentInstance]) -> [AgentInstance] {
+        var seen: Set<String> = []
+        var deduped: [AgentInstance] = []
+        for agent in candidates {
+            let key = agent.paneId.isEmpty ? "id:\(agent.id.uuidString)" : "pane:\(agent.paneId)"
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            deduped.append(agent)
+        }
+        return deduped
     }
 }

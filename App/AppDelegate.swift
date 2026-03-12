@@ -6,6 +6,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let agentRegistry = AgentRegistry()
     let ipcService = IPCService()
     private var notificationManager: NotificationManager?
+    private let completionReplayWindowSeconds: TimeInterval = 30
+    private let shownNotificationRetentionSeconds: TimeInterval = 6 * 60 * 60
+    private var shownNotificationEvents: [UUID: Date] = [:]
+    private var hasReceivedInitialSnapshot = false
+    private var shouldReplayCompletionsOnNextSnapshot = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? AppConfig.ensureDirectory()
@@ -24,7 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         ipcService.onConnectionChanged = { [weak self] connected in
             DispatchQueue.main.async {
-                self?.agentRegistry.monitorConnected = connected
+                guard let self else { return }
+                let wasConnected = self.agentRegistry.monitorConnected
+                self.agentRegistry.monitorConnected = connected
+                if connected, !wasConnected, self.hasReceivedInitialSnapshot {
+                    self.shouldReplayCompletionsOnNextSnapshot = true
+                }
             }
         }
 
@@ -44,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch message {
         case .snapshot(let snapshot):
             agentRegistry.applySnapshot(snapshot)
+            if shouldReplayCompletionsOnNextSnapshot {
+                replayRecentCompletionNotifications(from: snapshot.events)
+                shouldReplayCompletionsOnNextSnapshot = false
+            }
+            hasReceivedInitialSnapshot = true
             syncOverlayFromRegistry()
 
         case .register(let agent):
@@ -52,9 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .event(let event):
             agentRegistry.addEvent(event)
             agentRegistry.updateStatus(agentId: event.agentId, event: event)
-            if agentRegistry.config.notificationsEnabled && event.shouldNotify {
-                notificationManager?.show(event: event)
-            }
+            showNotificationIfNeeded(event)
 
         case .deregister(let agentId, let exitCode):
             let status: AgentStatus = (exitCode == 0) ? .completed : .errored
@@ -102,5 +115,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         notificationManager.replaceVisibleEvents(with: overlayEvents)
+    }
+
+    private func replayRecentCompletionNotifications(from events: [AgentEvent]) {
+        guard agentRegistry.config.notificationsEnabled else { return }
+        let replayable = NotificationReplayPolicy.replayableCompletionEvents(
+            from: events,
+            now: Date(),
+            replayWindowSeconds: completionReplayWindowSeconds,
+            alreadyShownEventIDs: Set(shownNotificationEvents.keys)
+        )
+        for event in replayable {
+            showNotificationIfNeeded(event)
+        }
+    }
+
+    private func showNotificationIfNeeded(_ event: AgentEvent) {
+        guard agentRegistry.config.notificationsEnabled else { return }
+        guard event.shouldNotify else { return }
+        guard shownNotificationEvents[event.id] == nil else { return }
+        shownNotificationEvents[event.id] = Date()
+        trimShownNotificationHistory(reference: Date())
+        notificationManager?.show(event: event)
+    }
+
+    private func trimShownNotificationHistory(reference now: Date) {
+        let threshold = now.addingTimeInterval(-shownNotificationRetentionSeconds)
+        shownNotificationEvents = shownNotificationEvents.filter { $0.value >= threshold }
     }
 }
