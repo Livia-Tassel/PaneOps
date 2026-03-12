@@ -129,12 +129,6 @@ public struct AgentInstance: Codable, Identifiable, Sendable {
     /// Mark the agent as having recent activity from a heartbeat.
     public mutating func recordHeartbeat(at timestamp: Date = Date()) {
         lastActiveAt = timestamp
-        switch status {
-        case .stalled, .expired:
-            status = .running
-        case .running, .waiting, .completed, .errored:
-            break
-        }
     }
 
     /// Mark the agent as resumed due to direct user interaction.

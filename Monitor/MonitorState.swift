@@ -121,28 +121,10 @@ actor MonitorState {
         case .heartbeat(let agentId):
             guard var agent = agents[agentId] else { break }
 
-            let previousStatus = agent.status
             agent.recordHeartbeat(at: nowProvider())
             agents[agentId] = agent
-            stallAlertedAgentIDs.remove(agentId)
-
-            let ackedIds: [UUID]
-            if previousStatus == .stalled || previousStatus == .expired {
-                ackedIds = acknowledgeRecoveredAgentEvents(
-                    agentId: agentId,
-                    eventTypes: [.stalledOrWaiting]
-                )
-            } else {
-                ackedIds = []
-            }
             saveAgents()
-            if !ackedIds.isEmpty {
-                persistEventsSnapshot()
-            }
             await broadcast(.heartbeat(agentId: agentId))
-            for eventId in ackedIds {
-                await broadcast(.ack(messageId: eventId))
-            }
 
         case .resume(let agentId):
             guard var agent = agents[agentId] else { break }

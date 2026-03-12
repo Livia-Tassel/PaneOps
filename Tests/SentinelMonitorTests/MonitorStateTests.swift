@@ -3,7 +3,7 @@ import XCTest
 @testable import SentinelShared
 
 final class MonitorStateTests: XCTestCase {
-    func testHeartbeatRecoversAgentAcknowledgesOldStallAndAllowsFutureStallAlerts() async throws {
+    func testHeartbeatDoesNotRecoverStalledAgentUntilResume() async throws {
         let clock = MutableClock(start: Date(timeIntervalSince1970: 1_000))
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -57,17 +57,10 @@ final class MonitorStateTests: XCTestCase {
 
         clock.advance(by: 5)
         await state.handle(.heartbeat(agentId: agent.id), from: sockets.connection)
-        let recoveryMessages = try sockets.readMessages(count: 2)
-
-        XCTAssertTrue(recoveryMessages.contains(where: { message in
+        let heartbeatMessages = try sockets.readMessages(count: 1)
+        XCTAssertTrue(heartbeatMessages.contains(where: { message in
             if case .heartbeat(let recoveredId) = message {
                 return recoveredId == agent.id
-            }
-            return false
-        }))
-        XCTAssertTrue(recoveryMessages.contains(where: { message in
-            if case .ack(let messageId) = message {
-                return messageId == firstStall.id
             }
             return false
         }))
@@ -86,11 +79,43 @@ final class MonitorStateTests: XCTestCase {
         )
 
         await state.handle(.event(secondStall), from: sockets.connection)
-        let secondBroadcast = try sockets.readMessages(count: 1)
-        guard case .event(let repeatedStallEvent) = secondBroadcast[0] else {
-            return XCTFail("Expected repeated stall event broadcast after recovery")
+        XCTAssertThrowsError(try sockets.readMessages(count: 1))
+
+        clock.advance(by: 1)
+        await state.handle(.resume(agentId: agent.id), from: sockets.connection)
+        let resumeMessages = try sockets.readMessages(count: 2)
+        XCTAssertTrue(resumeMessages.contains(where: { message in
+            if case .resume(let resumedId) = message {
+                return resumedId == agent.id
+            }
+            return false
+        }))
+        XCTAssertTrue(resumeMessages.contains(where: { message in
+            if case .ack(let messageId) = message {
+                return messageId == firstStall.id
+            }
+            return false
+        }))
+
+        clock.advance(by: 61)
+        let thirdStall = AgentEvent(
+            agentId: agent.id,
+            agentType: .codex,
+            displayLabel: "codex",
+            eventType: .stalledOrWaiting,
+            summary: "No output for 120s — agent may be stalled or waiting",
+            matchedRule: "stall-detection",
+            timestamp: clock.now,
+            paneId: agent.paneId,
+            sessionName: agent.sessionName
+        )
+
+        await state.handle(.event(thirdStall), from: sockets.connection)
+        let repeatedBroadcast = try sockets.readMessages(count: 1)
+        guard case .event(let repeatedStallEvent) = repeatedBroadcast[0] else {
+            return XCTFail("Expected repeated stall event broadcast after explicit resume")
         }
-        XCTAssertEqual(repeatedStallEvent.id, secondStall.id)
+        XCTAssertEqual(repeatedStallEvent.id, thirdStall.id)
     }
 
     func testResumeRecoversWaitingAgentAndAcknowledgesInputEvent() async throws {

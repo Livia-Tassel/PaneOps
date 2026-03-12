@@ -37,6 +37,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private var hasObservedUserInput = false
     private var lastUserInputAt: Date?
     private var hasEmittedCompletionSinceLastUserInput = false
+    private var latestCompletionSummary = ""
     private var hasSeenCodexAssistantOutputSinceLastUserInput = false
     private var latestCodexAssistantSummary = ""
     private var codexCompletionTimer: Task<Void, Never>?
@@ -150,7 +151,11 @@ public final class OutputProcessor: @unchecked Sendable {
         guard !data.isEmpty else { return }
 
         lastUserInputAt = Date()
+        lastOutputTime = Date()
+        stallFired = false
+        resetStallTimer()
         hasEmittedCompletionSinceLastUserInput = false
+        latestCompletionSummary = ""
         hasSeenCodexAssistantOutputSinceLastUserInput = false
         latestCodexAssistantSummary = ""
         codexCompletionTimer?.cancel()
@@ -183,6 +188,7 @@ public final class OutputProcessor: @unchecked Sendable {
         }
 
         observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
+        observeCompletionSummary(line: stripped, matchedEventType: match?.rule.eventType)
     }
 
     private func resetStallTimer() {
@@ -253,6 +259,7 @@ public final class OutputProcessor: @unchecked Sendable {
         }
 
         observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
+        observeCompletionSummary(line: stripped, matchedEventType: match?.rule.eventType)
     }
 
     private func decodeUTF8Text(from data: Data) -> (String, Data) {
@@ -285,6 +292,7 @@ public final class OutputProcessor: @unchecked Sendable {
     }
 
     private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {
+        let eventSummary = resolvedEventSummary(for: match, originalSummary: summary)
         if match.rule.eventType == .taskCompleted {
             hasEmittedCompletionSinceLastUserInput = true
             codexCompletionTimer?.cancel()
@@ -300,11 +308,11 @@ public final class OutputProcessor: @unchecked Sendable {
             agentType: agentType,
             displayLabel: displayLabel,
             eventType: match.rule.eventType,
-            summary: summary,
+            summary: eventSummary,
             matchedRule: match.rule.name,
             priority: match.rule.priority,
             shouldNotify: match.rule.triggersNotification,
-            dedupeKey: "\(agentId.uuidString)|\(match.rule.id.uuidString)|\(stableKeyFragment(from: summary))",
+            dedupeKey: "\(agentId.uuidString)|\(match.rule.id.uuidString)|\(stableKeyFragment(from: eventSummary))",
             paneId: paneId,
             windowId: windowId,
             sessionName: sessionName
@@ -390,6 +398,49 @@ public final class OutputProcessor: @unchecked Sendable {
 
     private func isPromptLikeLine(_ line: String) -> Bool {
         line.range(of: #"^\s*[❯›>](?:\s+\S.*)?$"#, options: .regularExpression) != nil
+    }
+
+    private func observeCompletionSummary(line: String, matchedEventType: EventType?) {
+        let normalizedLine = normalizedCompletionSummaryLine(from: line)
+        guard !normalizedLine.isEmpty else { return }
+        guard !isPromptLikeLine(normalizedLine) else { return }
+        guard !isLikelyControlSequenceResidue(normalizedLine) else { return }
+
+        switch matchedEventType {
+        case .taskCompleted?, .inputRequested?, .permissionRequested?:
+            return
+        default:
+            break
+        }
+
+        if agentType == .codex, isLikelyCodexChromeLine(normalizedLine) {
+            return
+        }
+
+        let candidate = summaryCandidate(from: normalizedLine)
+        guard !candidate.isEmpty else { return }
+        latestCompletionSummary = candidate
+    }
+
+    private func resolvedEventSummary(for match: RuleEngine.MatchResult, originalSummary: String) -> String {
+        guard match.rule.eventType == .taskCompleted else { return originalSummary }
+        guard isPromptLikeLine(originalSummary) else { return originalSummary }
+        guard !latestCompletionSummary.isEmpty else { return originalSummary }
+        return "Response completed: \(latestCompletionSummary)"
+    }
+
+    private func normalizedCompletionSummaryLine(from line: String) -> String {
+        if agentType == .codex {
+            return normalizeCodexAssistantLine(line)
+        }
+        return line
+    }
+
+    private func summaryCandidate(from line: String) -> String {
+        if agentType == .codex {
+            return summarizeCodexAssistantLine(line)
+        }
+        return line.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func observeCodexCompletionActivity(line: String, matchedEventType: EventType?) {

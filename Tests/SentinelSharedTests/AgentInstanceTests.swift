@@ -2,7 +2,7 @@ import XCTest
 @testable import SentinelShared
 
 final class AgentInstanceTests: XCTestCase {
-    func testHeartbeatRestoresStalledAgentToRunning() {
+    func testHeartbeatPreservesStalledStatus() {
         let startedAt = Date(timeIntervalSince1970: 100)
         let heartbeatAt = Date(timeIntervalSince1970: 120)
         var agent = AgentInstance(
@@ -15,7 +15,7 @@ final class AgentInstanceTests: XCTestCase {
 
         agent.recordHeartbeat(at: heartbeatAt)
 
-        XCTAssertEqual(agent.status, .running)
+        XCTAssertEqual(agent.status, .stalled)
         XCTAssertEqual(agent.lastActiveAt, heartbeatAt)
     }
 

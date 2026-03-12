@@ -429,6 +429,31 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
     }
 
+    func testClaudePromptCompletionUsesLatestAssistantLineSummary() {
+        let expectation = XCTestExpectation(description: "Claude completion uses last assistant line")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-summary",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
+        processor.processData("❯\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Response completed: Hello.")
+    }
+
     func testCodexQuietCompletionAfterAssistantOutputSilence() {
         let expectation = XCTestExpectation(description: "Codex emits quiet completion after assistant output")
         let events = LockedBox<[AgentEvent]>([])
@@ -510,6 +535,33 @@ final class OutputProcessorTests: XCTestCase {
 
         XCTAssertEqual(events.value.count, 1)
         XCTAssertEqual(events.value.first?.matchedRule, "Codex: Quiet completion")
+    }
+
+    func testStallDetectionOnlyRefiresAfterUserInput() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "stall-reset",
+            rules: rules,
+            stallTimeout: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .stalledOrWaiting)
+
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertEqual(events.value.count, 1)
+
+        processor.noteUserInput("retry\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.25)
+
+        XCTAssertEqual(events.value.count, 2)
+        XCTAssertEqual(events.value.last?.eventType, .stalledOrWaiting)
     }
 
     func testSuppressesRepeatedClaudePromptReadyWhileIdle() {
