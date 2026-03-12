@@ -34,6 +34,8 @@ public final class OutputProcessor: @unchecked Sendable {
     private var recentLineSeenAt: [String: Date] = [:]
     private let repeatedLineSuppressionSeconds: TimeInterval = 1.2
     private var hasObservedUserInput = false
+    private var lastUserInputAt: Date?
+    private var hasEmittedCompletionSinceLastUserInput = false
 
     public init(
         agentId: UUID,
@@ -138,7 +140,12 @@ public final class OutputProcessor: @unchecked Sendable {
     /// Let the processor know the user has typed into the PTY.
     /// This suppresses startup banner false positives for interactive events.
     public func noteUserInput(_ data: Data) {
-        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput, !data.isEmpty else { return }
+        guard !data.isEmpty else { return }
+
+        lastUserInputAt = Date()
+        hasEmittedCompletionSinceLastUserInput = false
+
+        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return }
         hasObservedUserInput = true
     }
 
@@ -148,6 +155,8 @@ public final class OutputProcessor: @unchecked Sendable {
         let stripped = stripper.strip(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stripped.isEmpty else { return }
 
+        if isLikelyLocalInputEcho(stripped) { return }
+
         // Debug: log all stripped lines to file
         if debugMode, let fh = debugFile {
             let logLine = "[STRIPPED] \(stripped)\n"
@@ -156,6 +165,7 @@ public final class OutputProcessor: @unchecked Sendable {
 
         if let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) {
             if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
+            if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
             if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
             guard !shouldSuppressRepeatedLine(stripped) else { return }
             emitMatchedEvent(match, summary: stripped)
@@ -211,6 +221,7 @@ public final class OutputProcessor: @unchecked Sendable {
         let stripped = stripper.strip(lineBuffer).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stripped.isEmpty else { return }
         guard stripped.count <= 120 else { return }
+        if isLikelyLocalInputEcho(stripped) { return }
 
         guard let match = ruleEngine.match(line: stripped, agentType: agentType, agentId: agentId) else {
             return
@@ -222,6 +233,7 @@ public final class OutputProcessor: @unchecked Sendable {
             return
         }
         if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
+        if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
         if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
         if shouldSuppressRepeatedLine(stripped) { return }
 
@@ -258,6 +270,10 @@ public final class OutputProcessor: @unchecked Sendable {
     }
 
     private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {
+        if match.rule.eventType == .taskCompleted {
+            hasEmittedCompletionSinceLastUserInput = true
+        }
+
         if debugMode, let fh = debugFile {
             let logLine = "[MATCH] rule=\(match.rule.name) type=\(match.rule.eventType.rawValue)\n"
             fh.write(logLine.data(using: .utf8)!)
@@ -330,5 +346,33 @@ public final class OutputProcessor: @unchecked Sendable {
             return true
         }
         return false
+    }
+
+    private func shouldSuppressCompletionForTurnState(
+        _ match: RuleEngine.MatchResult,
+        summary: String
+    ) -> Bool {
+        guard match.rule.eventType == .taskCompleted else { return false }
+        if hasEmittedCompletionSinceLastUserInput {
+            return true
+        }
+        if isLikelyPromptEchoBeforeAssistantOutput(summary) {
+            return true
+        }
+        return false
+    }
+
+    private func isLikelyLocalInputEcho(_ line: String) -> Bool {
+        isLikelyPromptEchoBeforeAssistantOutput(line)
+    }
+
+    private func isLikelyPromptEchoBeforeAssistantOutput(_ line: String) -> Bool {
+        guard let lastUserInputAt else { return false }
+        guard Date().timeIntervalSince(lastUserInputAt) <= 0.35 else { return false }
+        return isPromptLikeLine(line)
+    }
+
+    private func isPromptLikeLine(_ line: String) -> Bool {
+        line.range(of: #"^\s*[❯›>](?:\s+\S.*)?$"#, options: .regularExpression) != nil
     }
 }

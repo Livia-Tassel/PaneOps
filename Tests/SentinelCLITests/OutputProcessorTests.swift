@@ -301,6 +301,8 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertTrue(events.value.isEmpty)
 
         processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.1)
 
@@ -326,6 +328,8 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertTrue(events.value.isEmpty)
 
         processor.noteUserInput("\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.1)
 
@@ -396,6 +400,88 @@ final class OutputProcessorTests: XCTestCase {
 
         XCTAssertEqual(events.value.count, 1)
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+    }
+
+    func testSuppressesClaudePromptEchoImmediatelyAfterUserInput() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-echo",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("❯".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
+        processor.processData("❯".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+    }
+
+    func testSuppressesCodexInputEchoUntilAssistantOutputThenAllowsCompletion() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "codex-echo",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("› hello".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.processData("• Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
+        processor.processData("› hello".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "› hello")
+    }
+
+    func testSuppressesRepeatedClaudePromptReadyWhileIdle() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-idle",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
+        processor.processData("❯".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(events.value.count, 1)
+
+        Thread.sleep(forTimeInterval: 1.3)
+        processor.processData("❯".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.count, 1)
     }
 }
 
