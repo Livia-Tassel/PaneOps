@@ -469,6 +469,7 @@ public final class OutputProcessor: @unchecked Sendable {
         guard !isPromptLikeLine(normalizedLine) else { return }
         guard !isLikelySeparatorLine(normalizedLine) else { return }
         guard !isLikelyControlSequenceResidue(normalizedLine) else { return }
+        guard !isLikelyClaudeStatusLine(normalizedLine) else { return }
 
         switch matchedEventType {
         case .taskCompleted?, .inputRequested?, .permissionRequested?:
@@ -516,6 +517,14 @@ public final class OutputProcessor: @unchecked Sendable {
         guard trimmed.count >= 3 else { return false }
         let separators = CharacterSet(charactersIn: "-_=~─━═")
         return trimmed.unicodeScalars.allSatisfy { separators.contains($0) }
+    }
+
+    private func isLikelyClaudeStatusLine(_ line: String) -> Bool {
+        guard agentType == .claude else { return false }
+        return line.range(
+            of: #"^\s*[✢✣✤✥✦✧✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿❇]\s*[A-Za-z][A-Za-z\s-]*(?:…|\.{3})(?:\s*\([^)]*\))?\s*$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private func observeCodexCompletionActivity(line: String, matchedEventType: EventType?) {

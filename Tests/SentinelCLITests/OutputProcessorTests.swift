@@ -495,6 +495,40 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.summary, "Hello.")
     }
 
+    func testClaudeThinkingStatusDoesNotTriggerCompletionBeforeRealAnswer() {
+        let expectation = XCTestExpectation(description: "Claude completion waits for real answer after thinking status")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-status",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            if event.eventType == .taskCompleted {
+                expectation.fulfill()
+            }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("✽ Stewing…\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.05)
+        processor.processData("❯\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.05)
+        processor.processData("❯\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.summary, "Hello.")
+    }
+
     func testClaudePromptCompletionIgnoresSeparatorLineSummary() {
         let expectation = XCTestExpectation(description: "Claude completion ignores separator line summary")
         let events = LockedBox<[AgentEvent]>([])
