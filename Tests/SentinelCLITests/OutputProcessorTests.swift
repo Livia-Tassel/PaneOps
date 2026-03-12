@@ -454,6 +454,32 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.summary, "Hello.")
     }
 
+    func testClaudePromptCompletionIgnoresSeparatorLineSummary() {
+        let expectation = XCTestExpectation(description: "Claude completion ignores separator line summary")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-summary-separator",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Real answer line.\n".data(using: .utf8)!)
+        processor.processData("────────────────────────────────────\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
+        processor.processData("❯\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Real answer line.")
+    }
+
     func testCodexQuietCompletionAfterAssistantOutputSilence() {
         let expectation = XCTestExpectation(description: "Codex emits quiet completion after assistant output")
         let events = LockedBox<[AgentEvent]>([])

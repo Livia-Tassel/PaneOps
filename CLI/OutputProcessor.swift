@@ -404,6 +404,7 @@ public final class OutputProcessor: @unchecked Sendable {
         let normalizedLine = normalizedCompletionSummaryLine(from: line)
         guard !normalizedLine.isEmpty else { return }
         guard !isPromptLikeLine(normalizedLine) else { return }
+        guard !isLikelySeparatorLine(normalizedLine) else { return }
         guard !isLikelyControlSequenceResidue(normalizedLine) else { return }
 
         switch matchedEventType {
@@ -441,6 +442,13 @@ public final class OutputProcessor: @unchecked Sendable {
             return summarizeCodexAssistantLine(line)
         }
         return line.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isLikelySeparatorLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return false }
+        let separators = CharacterSet(charactersIn: "-_=~─━═")
+        return trimmed.unicodeScalars.allSatisfy { separators.contains($0) }
     }
 
     private func observeCodexCompletionActivity(line: String, matchedEventType: EventType?) {
