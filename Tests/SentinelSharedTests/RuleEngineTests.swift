@@ -168,4 +168,20 @@ final class RuleEngineTests: XCTestCase {
         let match = engine.match(line: line, agentType: .codex, agentId: agentId)
         XCTAssertTrue(match == nil || match?.rule.eventType != .inputRequested)
     }
+
+    func testCodexCompletedRuleMatchesInlinePrompt() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "› hello", agentType: .codex, agentId: agentId)
+        XCTAssertEqual(match?.rule.eventType, .taskCompleted)
+    }
+
+    func testCodexCompletedRuleDoesNotMatchMarkdownQuoteLine() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "> quoted text", agentType: .codex, agentId: agentId)
+        XCTAssertTrue(match == nil || match?.rule.eventType != .taskCompleted)
+    }
 }

@@ -103,6 +103,7 @@ public enum BuiltinRules {
             agentType: .codex,
             patterns: [
                 RulePattern(kind: .regex, value: "^\\s*[❯›>]\\s*$"),
+                RulePattern(kind: .regex, value: "^\\s*[❯›]\\s+\\S.*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*(task )?completed( successfully)?\\.?\\s*$"),
                 RulePattern(kind: .regex, value: "(?i)^\\s*all done\\.?\\s*$"),
             ],

@@ -331,6 +331,72 @@ final class OutputProcessorTests: XCTestCase {
 
         XCTAssertEqual(events.value.last?.eventType, .taskCompleted)
     }
+
+    func testDetectsCodexPromptAfterCarriageReturnRewrite() {
+        let expectation = XCTestExpectation(description: "Codex prompt after carriage return emits once")
+        let events = LockedBox<[AgentEvent]>([])
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "codex-cr",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.processData("Agent Sentinel is local-first.\r› ".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+    }
+
+    func testDetectsCodexInlinePromptWithoutTrailingNewline() {
+        let expectation = XCTestExpectation(description: "Codex inline prompt emits completion")
+        let receivedEvent = LockedBox<AgentEvent?>(nil)
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "codex-inline",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            receivedEvent.withLock { $0 = event }
+            expectation.fulfill()
+        }
+
+        processor.processData("› hello".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(receivedEvent.value?.eventType, .taskCompleted)
+    }
+
+    func testDoesNotDuplicateCodexPromptWhenInputEchoExtendsPromptLine() {
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .codex,
+            displayLabel: "codex-inline-dedupe",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.processData("› ".data(using: .utf8)!)
+        processor.processData("hello".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+    }
 }
 
 private final class LockedBox<T>: @unchecked Sendable {

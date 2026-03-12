@@ -83,8 +83,9 @@ public final class OutputProcessor: @unchecked Sendable {
         stallFired = false
         resetStallTimer()
 
-        let (text, pendingBytes) = decodeUTF8Text(from: data)
+        let (decodedText, pendingBytes) = decodeUTF8Text(from: data)
         pendingUTF8Bytes = pendingBytes
+        let text = normalizeLineEndings(decodedText)
         guard !text.isEmpty else { return }
         lineBuffer += text
         if lineBuffer.count > maxLineBufferChars {
@@ -248,6 +249,12 @@ public final class OutputProcessor: @unchecked Sendable {
         }
 
         return (String(decoding: combined, as: UTF8.self), Data())
+    }
+
+    private func normalizeLineEndings(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
     }
 
     private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {
