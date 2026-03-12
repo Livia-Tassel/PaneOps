@@ -426,7 +426,7 @@ public final class OutputProcessor: @unchecked Sendable {
         guard match.rule.eventType == .taskCompleted else { return originalSummary }
         guard isPromptLikeLine(originalSummary) else { return originalSummary }
         guard !latestCompletionSummary.isEmpty else { return originalSummary }
-        return "Response completed: \(latestCompletionSummary)"
+        return latestCompletionSummary
     }
 
     private func normalizedCompletionSummaryLine(from line: String) -> String {

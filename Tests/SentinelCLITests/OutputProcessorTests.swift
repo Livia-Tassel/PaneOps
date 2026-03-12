@@ -429,7 +429,7 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
     }
 
-    func testClaudePromptCompletionUsesLatestAssistantLineSummary() {
+    func testClaudePromptCompletionUsesLastAssistantLineVerbatim() {
         let expectation = XCTestExpectation(description: "Claude completion uses last assistant line")
         let events = LockedBox<[AgentEvent]>([])
         let rules = RuleEngine.effectiveRules(config: AppConfig())
@@ -451,7 +451,7 @@ final class OutputProcessorTests: XCTestCase {
 
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
-        XCTAssertEqual(events.value.first?.summary, "Response completed: Hello.")
+        XCTAssertEqual(events.value.first?.summary, "Hello.")
     }
 
     func testCodexQuietCompletionAfterAssistantOutputSilence() {
