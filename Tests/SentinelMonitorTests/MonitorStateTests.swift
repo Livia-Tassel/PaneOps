@@ -179,6 +179,88 @@ final class MonitorStateTests: XCTestCase {
             return false
         }))
     }
+
+    func testActivityRecoversStalledAgentAndAcknowledgesOldStallEvent() async throws {
+        let clock = MutableClock(start: Date(timeIntervalSince1970: 3_000))
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let agent = AgentInstance(
+            agentType: .codex,
+            sessionName: "main",
+            paneId: "%3",
+            lastActiveAt: clock.now,
+            status: .running
+        )
+        let state = MonitorState(
+            tmux: TmuxClient(runner: StubCommandRunner(), tmuxExecutable: "/opt/homebrew/bin/tmux"),
+            nowProvider: { clock.now },
+            config: AppConfig(maxStoredEvents: 20),
+            eventStore: EventStore(fileURL: tempDir.appendingPathComponent("events.jsonl"), maxLines: 20),
+            initialAgents: [agent.id: agent],
+            initialEvents: [],
+            persistAgents: { _ in }
+        )
+
+        let sockets = try SocketPair()
+        defer { sockets.close() }
+
+        await state.handle(.subscribe(SubscribeRequest(kind: .app)), from: sockets.connection)
+        _ = try sockets.readMessages(count: 1)
+
+        let stallEvent = AgentEvent(
+            agentId: agent.id,
+            agentType: .codex,
+            displayLabel: "codex",
+            eventType: .stalledOrWaiting,
+            summary: "No output for 120s — agent may be stalled or waiting",
+            matchedRule: "stall-detection",
+            timestamp: clock.now,
+            paneId: agent.paneId,
+            sessionName: agent.sessionName
+        )
+
+        await state.handle(.event(stallEvent), from: sockets.connection)
+        _ = try sockets.readMessages(count: 1)
+
+        clock.advance(by: 1)
+        await state.handle(.activity(agentId: agent.id), from: sockets.connection)
+        let activityMessages = try sockets.readMessages(count: 2)
+
+        XCTAssertTrue(activityMessages.contains(where: { message in
+            if case .activity(let activeId) = message {
+                return activeId == agent.id
+            }
+            return false
+        }))
+        XCTAssertTrue(activityMessages.contains(where: { message in
+            if case .ack(let messageId) = message {
+                return messageId == stallEvent.id
+            }
+            return false
+        }))
+
+        clock.advance(by: 61)
+        let repeatedStall = AgentEvent(
+            agentId: agent.id,
+            agentType: .codex,
+            displayLabel: "codex",
+            eventType: .stalledOrWaiting,
+            summary: "No output for 120s — agent may be stalled or waiting",
+            matchedRule: "stall-detection",
+            timestamp: clock.now,
+            paneId: agent.paneId,
+            sessionName: agent.sessionName
+        )
+
+        await state.handle(.event(repeatedStall), from: sockets.connection)
+        let repeatedMessages = try sockets.readMessages(count: 1)
+        guard case .event(let repeatedEvent) = repeatedMessages[0] else {
+            return XCTFail("Expected repeated stall broadcast after output activity recovery")
+        }
+        XCTAssertEqual(repeatedEvent.id, repeatedStall.id)
+    }
 }
 
 private final class MutableClock: @unchecked Sendable {

@@ -131,6 +131,17 @@ public struct AgentInstance: Codable, Identifiable, Sendable {
         lastActiveAt = timestamp
     }
 
+    /// Mark the agent as having resumed visible output.
+    public mutating func recordOutputActivity(at timestamp: Date = Date()) {
+        lastActiveAt = timestamp
+        switch status {
+        case .stalled, .expired:
+            status = .running
+        case .running, .waiting, .completed, .errored:
+            break
+        }
+    }
+
     /// Mark the agent as resumed due to direct user interaction.
     public mutating func recordResume(at timestamp: Date = Date()) {
         lastActiveAt = timestamp

@@ -62,6 +62,12 @@ final class AgentRegistry: ObservableObject, @unchecked Sendable {
         agents[agentId] = agent
     }
 
+    func activity(agentId: UUID) {
+        guard var agent = agents[agentId] else { return }
+        agent.recordOutputActivity(at: Date())
+        agents[agentId] = agent
+    }
+
     func resume(agentId: UUID) {
         guard var agent = agents[agentId] else { return }
         agent.recordResume(at: Date())

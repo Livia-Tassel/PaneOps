@@ -78,6 +78,20 @@ final class IPCFramingTests: XCTestCase {
         }
     }
 
+    func testRoundtripActivity() throws {
+        let agentId = UUID()
+        let message = IPCMessage.activity(agentId: agentId)
+
+        let encoded = try IPCFraming.encode(message)
+        let (decoded, _) = try XCTUnwrap(IPCFraming.decode(from: encoded))
+
+        if case .activity(let id) = decoded {
+            XCTAssertEqual(id, agentId)
+        } else {
+            XCTFail("Expected activity message")
+        }
+    }
+
     func testRoundtripResume() throws {
         let agentId = UUID()
         let message = IPCMessage.resume(agentId: agentId)
@@ -174,10 +188,12 @@ final class IPCFramingTests: XCTestCase {
 
     func testMultipleFrames() throws {
         let msg1 = IPCMessage.heartbeat(agentId: UUID())
-        let msg2 = IPCMessage.ack(messageId: UUID())
+        let msg2 = IPCMessage.activity(agentId: UUID())
+        let msg3 = IPCMessage.ack(messageId: UUID())
 
         var buffer = try IPCFraming.encode(msg1)
         buffer.append(try IPCFraming.encode(msg2))
+        buffer.append(try IPCFraming.encode(msg3))
 
         // Decode first
         let (decoded1, consumed1) = try XCTUnwrap(IPCFraming.decode(from: buffer))
@@ -185,8 +201,12 @@ final class IPCFramingTests: XCTestCase {
 
         // Decode second from remaining
         let remaining = buffer.subdata(in: consumed1..<buffer.count)
-        let (decoded2, _) = try XCTUnwrap(IPCFraming.decode(from: remaining))
-        if case .ack = decoded2 {} else { XCTFail("Expected ack") }
+        let (decoded2, consumed2) = try XCTUnwrap(IPCFraming.decode(from: remaining))
+        if case .activity = decoded2 {} else { XCTFail("Expected activity") }
+
+        let trailing = remaining.subdata(in: consumed2..<remaining.count)
+        let (decoded3, _) = try XCTUnwrap(IPCFraming.decode(from: trailing))
+        if case .ack = decoded3 {} else { XCTFail("Expected ack") }
     }
 
     func testRejectsOversizedFrameLength() {

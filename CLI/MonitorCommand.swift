@@ -63,7 +63,8 @@ struct MonitorCommand: ParsableCommand {
             sessionName: sessionName,
             rules: rules,
             stallTimeout: config.stallTimeoutSeconds,
-            rateLimitLinesPerSec: config.outputRateLimitLinesPerSec
+            rateLimitLinesPerSec: config.outputRateLimitLinesPerSec,
+            suppressInteractiveUntilFirstInput: type != .custom
         ) { event in
             try? ipcClient?.send(.event(event))
         }
@@ -74,9 +75,17 @@ struct MonitorCommand: ParsableCommand {
         let outputTask = Task {
             for await data in pty.outputStream() {
                 FileHandle.standardOutput.write(data)
+                try? ipcClient?.send(.activity(agentId: id))
                 processor.processData(data)
             }
             processor.flush()
+        }
+
+        let heartbeatTask = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? ipcClient?.send(.heartbeat(agentId: id))
+            }
         }
 
         let inputTask = Task.detached {
@@ -86,14 +95,17 @@ struct MonitorCommand: ParsableCommand {
             while true {
                 let n = Foundation.read(FileHandle.standardInput.fileDescriptor, buf, bufSize)
                 guard n > 0 else { break }
+                let data = Data(bytes: buf, count: n)
+                processor.noteUserInput(data)
                 try? ipcClient?.send(.resume(agentId: id))
-                pty.write(Data(bytes: buf, count: n))
+                pty.write(data)
             }
         }
 
         let exitCode = pty.waitForExit()
         outputTask.cancel()
         inputTask.cancel()
+        heartbeatTask.cancel()
         try? ipcClient?.send(.deregister(agentId: id, exitCode: exitCode))
         throw ExitCode(exitCode)
     }

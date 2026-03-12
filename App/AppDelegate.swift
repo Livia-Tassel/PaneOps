@@ -63,6 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .heartbeat(let agentId):
             agentRegistry.heartbeat(agentId: agentId)
 
+        case .activity(let agentId):
+            agentRegistry.activity(agentId: agentId)
+
         case .resume(let agentId):
             agentRegistry.resume(agentId: agentId)
 

@@ -105,6 +105,7 @@ struct RunCommand: ParsableCommand {
             for await data in pty.outputStream() {
                 // Write to our stdout so the user sees output
                 FileHandle.standardOutput.write(data)
+                try? ipcClient?.send(.activity(agentId: agentId))
                 processor.processData(data)
             }
             processor.flush()

@@ -34,11 +34,26 @@ final class AgentInstanceTests: XCTestCase {
         XCTAssertEqual(agent.lastActiveAt, heartbeatAt)
     }
 
+    func testOutputActivityRestoresStalledAgentToRunning() {
+        let outputAt = Date(timeIntervalSince1970: 260)
+        var agent = AgentInstance(
+            agentType: .codex,
+            paneId: "%3",
+            lastActiveAt: Date(timeIntervalSince1970: 240),
+            status: .stalled
+        )
+
+        agent.recordOutputActivity(at: outputAt)
+
+        XCTAssertEqual(agent.status, .running)
+        XCTAssertEqual(agent.lastActiveAt, outputAt)
+    }
+
     func testApplyExpirationEventMarksAgentExpired() {
         let eventTime = Date(timeIntervalSince1970: 330)
         var agent = AgentInstance(
             agentType: .gemini,
-            paneId: "%3",
+            paneId: "%4",
             lastActiveAt: Date(timeIntervalSince1970: 300),
             status: .running
         )
@@ -64,7 +79,7 @@ final class AgentInstanceTests: XCTestCase {
         let eventTime = Date(timeIntervalSince1970: 430)
         var agent = AgentInstance(
             agentType: .claude,
-            paneId: "%4",
+            paneId: "%5",
             lastActiveAt: Date(timeIntervalSince1970: 400),
             status: .running
         )
@@ -89,7 +104,7 @@ final class AgentInstanceTests: XCTestCase {
         let resumeAt = Date(timeIntervalSince1970: 520)
         var agent = AgentInstance(
             agentType: .codex,
-            paneId: "%5",
+            paneId: "%6",
             lastActiveAt: Date(timeIntervalSince1970: 500),
             status: .waiting
         )
