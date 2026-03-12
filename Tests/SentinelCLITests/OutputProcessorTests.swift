@@ -163,8 +163,8 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.eventType, .permissionRequested)
     }
 
-    func testPreservesSplitUTF8PromptAcrossChunks() {
-        let expectation = XCTestExpectation(description: "Split UTF-8 prompt emits once")
+    func testPreservesSplitUTF8PromptAcrossChunksAfterAssistantOutput() {
+        let expectation = XCTestExpectation(description: "Split UTF-8 prompt emits once after assistant output")
         let events = LockedBox<[AgentEvent]>([])
 
         let rules = RuleEngine.effectiveRules(config: AppConfig())
@@ -173,12 +173,16 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "utf8",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
             expectation.fulfill()
         }
 
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
         let promptData = "❯".data(using: .utf8)!
         processor.processData(promptData.prefix(1))
         processor.processData(promptData.suffix(promptData.count - 1))
@@ -188,8 +192,8 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
     }
 
-    func testDetectsPromptWithoutTrailingNewline() {
-        let expectation = XCTestExpectation(description: "Prompt event emitted from buffered candidate")
+    func testDetectsPromptWithoutTrailingNewlineAfterAssistantOutput() {
+        let expectation = XCTestExpectation(description: "Prompt event emitted from buffered candidate after assistant output")
         let receivedEvent = LockedBox<AgentEvent?>(nil)
 
         let rules = RuleEngine.effectiveRules(config: AppConfig())
@@ -198,12 +202,16 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "prompt",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             receivedEvent.withLock { $0 = event }
             expectation.fulfill()
         }
 
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯".data(using: .utf8)!)
 
         wait(for: [expectation], timeout: 1.0)
@@ -218,14 +226,18 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "prompt-dedupe",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
 
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯".data(using: .utf8)!)
         processor.processData("\n".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
 
         XCTAssertEqual(events.value.count, 1)
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
@@ -291,7 +303,8 @@ final class OutputProcessorTests: XCTestCase {
             displayLabel: "gate",
             rules: rules,
             stallTimeout: 999,
-            suppressInteractiveUntilFirstInput: true
+            suppressInteractiveUntilFirstInput: true,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
@@ -304,7 +317,7 @@ final class OutputProcessorTests: XCTestCase {
         processor.processData("Hello.\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯\n".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
 
         XCTAssertEqual(events.value.last?.eventType, .taskCompleted)
     }
@@ -318,7 +331,8 @@ final class OutputProcessorTests: XCTestCase {
             displayLabel: "enter",
             rules: rules,
             stallTimeout: 999,
-            suppressInteractiveUntilFirstInput: true
+            suppressInteractiveUntilFirstInput: true,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
@@ -331,13 +345,12 @@ final class OutputProcessorTests: XCTestCase {
         processor.processData("Hello.\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯\n".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
 
         XCTAssertEqual(events.value.last?.eventType, .taskCompleted)
     }
 
-    func testDetectsCodexPromptAfterCarriageReturnRewrite() {
-        let expectation = XCTestExpectation(description: "Codex prompt after carriage return emits once")
+    func testSuppressesCodexPromptAfterCarriageReturnRewriteWithoutAssistantOutput() {
         let events = LockedBox<[AgentEvent]>([])
 
         let rules = RuleEngine.effectiveRules(config: AppConfig())
@@ -346,60 +359,59 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .codex,
             displayLabel: "codex-cr",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            suppressInteractiveUntilFirstInput: true,
+            codexCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
-            expectation.fulfill()
         }
 
         processor.processData("Agent Sentinel is local-first.\r› ".data(using: .utf8)!)
-
-        wait(for: [expectation], timeout: 1.0)
-        XCTAssertEqual(events.value.count, 1)
-        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertTrue(events.value.isEmpty)
     }
 
-    func testDetectsCodexInlinePromptWithoutTrailingNewline() {
-        let expectation = XCTestExpectation(description: "Codex inline prompt emits completion")
-        let receivedEvent = LockedBox<AgentEvent?>(nil)
-
+    func testSuppressesCodexInlinePromptWithoutTrailingNewlineUntilAssistantOutput() {
+        let events = LockedBox<[AgentEvent]>([])
         let rules = RuleEngine.effectiveRules(config: AppConfig())
         let processor = OutputProcessor(
             agentId: UUID(),
             agentType: .codex,
             displayLabel: "codex-inline",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            codexCompletionQuietPeriod: 0.15
         ) { event in
-            receivedEvent.withLock { $0 = event }
-            expectation.fulfill()
+            events.withLock { $0.append(event) }
         }
 
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
         processor.processData("› hello".data(using: .utf8)!)
-
-        wait(for: [expectation], timeout: 1.0)
-        XCTAssertEqual(receivedEvent.value?.eventType, .taskCompleted)
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertTrue(events.value.isEmpty)
     }
 
-    func testDoesNotDuplicateCodexPromptWhenInputEchoExtendsPromptLine() {
+    func testIgnoresTerminalFocusReportBeforeCodexStartupPrompt() {
         let events = LockedBox<[AgentEvent]>([])
         let rules = RuleEngine.effectiveRules(config: AppConfig())
         let processor = OutputProcessor(
             agentId: UUID(),
             agentType: .codex,
-            displayLabel: "codex-inline-dedupe",
+            displayLabel: "codex-focus",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            suppressInteractiveUntilFirstInput: true,
+            codexCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
 
+        let focusIn = Data([0x1B, 0x5B, 0x49])
+        XCTAssertFalse(processor.noteUserInput(focusIn))
         processor.processData("› ".data(using: .utf8)!)
-        processor.processData("hello".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
 
-        XCTAssertEqual(events.value.count, 1)
-        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertTrue(events.value.isEmpty)
     }
 
     func testSuppressesClaudePromptEchoImmediatelyAfterUserInput() {
@@ -410,7 +422,8 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "claude-echo",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
@@ -423,7 +436,7 @@ final class OutputProcessorTests: XCTestCase {
         processor.processData("Hello.\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
 
         XCTAssertEqual(events.value.count, 1)
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
@@ -438,7 +451,8 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "claude-summary",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
             expectation.fulfill()
@@ -463,7 +477,8 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "claude-summary-separator",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
             expectation.fulfill()
@@ -478,6 +493,38 @@ final class OutputProcessorTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
         XCTAssertEqual(events.value.first?.summary, "Real answer line.")
+    }
+
+    func testClaudePromptCompletionWaitsForQuietAfterPrompt() {
+        let expectation = XCTestExpectation(description: "Claude completion waits for quiet after prompt")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-quiet-prompt",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("First line.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.4)
+        processor.processData("❯".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.05)
+        processor.processData("Still working.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertTrue(events.value.isEmpty)
+
+        processor.processData("❯".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.summary, "Still working.")
     }
 
     func testCodexQuietCompletionAfterAssistantOutputSilence() {
@@ -598,7 +645,8 @@ final class OutputProcessorTests: XCTestCase {
             agentType: .claude,
             displayLabel: "claude-idle",
             rules: rules,
-            stallTimeout: 999
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
         ) { event in
             events.withLock { $0.append(event) }
         }
@@ -607,12 +655,12 @@ final class OutputProcessorTests: XCTestCase {
         processor.processData("Hello.\n".data(using: .utf8)!)
         Thread.sleep(forTimeInterval: 0.4)
         processor.processData("❯".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
         XCTAssertEqual(events.value.count, 1)
 
         Thread.sleep(forTimeInterval: 1.3)
         processor.processData("❯".data(using: .utf8)!)
-        Thread.sleep(forTimeInterval: 0.1)
+        Thread.sleep(forTimeInterval: 0.25)
 
         XCTAssertEqual(events.value.count, 1)
     }

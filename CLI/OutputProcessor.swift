@@ -15,6 +15,7 @@ public final class OutputProcessor: @unchecked Sendable {
     private let debugMode: Bool
     private let debugFile: FileHandle?
     private let suppressInteractiveUntilFirstInput: Bool
+    private let promptCompletionQuietPeriod: TimeInterval
     private let codexCompletionQuietPeriod: TimeInterval
     private var pendingUTF8Bytes = Data()
 
@@ -38,6 +39,8 @@ public final class OutputProcessor: @unchecked Sendable {
     private var lastUserInputAt: Date?
     private var hasEmittedCompletionSinceLastUserInput = false
     private var latestCompletionSummary = ""
+    private var hasSeenClaudeAssistantOutputSinceLastUserInput = false
+    private var claudePromptCompletionTimer: Task<Void, Never>?
     private var hasSeenCodexAssistantOutputSinceLastUserInput = false
     private var latestCodexAssistantSummary = ""
     private var codexCompletionTimer: Task<Void, Never>?
@@ -54,6 +57,7 @@ public final class OutputProcessor: @unchecked Sendable {
         rateLimitLinesPerSec: Int = 100,
         debugMode: Bool = false,
         suppressInteractiveUntilFirstInput: Bool = false,
+        promptCompletionQuietPeriod: TimeInterval = 0.6,
         codexCompletionQuietPeriod: TimeInterval = 3,
         onEvent: @escaping @Sendable (AgentEvent) -> Void
     ) {
@@ -68,6 +72,7 @@ public final class OutputProcessor: @unchecked Sendable {
         self.rateLimitLinesPerSec = rateLimitLinesPerSec
         self.debugMode = debugMode
         self.suppressInteractiveUntilFirstInput = suppressInteractiveUntilFirstInput
+        self.promptCompletionQuietPeriod = promptCompletionQuietPeriod
         self.codexCompletionQuietPeriod = codexCompletionQuietPeriod
         self.onEvent = onEvent
 
@@ -137,6 +142,7 @@ public final class OutputProcessor: @unchecked Sendable {
             lineBuffer = ""
         }
         stallTimer?.cancel()
+        claudePromptCompletionTimer?.cancel()
         codexCompletionTimer?.cancel()
     }
 
@@ -147,8 +153,10 @@ public final class OutputProcessor: @unchecked Sendable {
 
     /// Let the processor know the user has typed into the PTY.
     /// This suppresses startup banner false positives for interactive events.
-    public func noteUserInput(_ data: Data) {
-        guard !data.isEmpty else { return }
+    @discardableResult
+    public func noteUserInput(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return false }
+        guard containsMeaningfulUserInput(data) else { return false }
 
         lastUserInputAt = Date()
         lastOutputTime = Date()
@@ -156,12 +164,15 @@ public final class OutputProcessor: @unchecked Sendable {
         resetStallTimer()
         hasEmittedCompletionSinceLastUserInput = false
         latestCompletionSummary = ""
+        hasSeenClaudeAssistantOutputSinceLastUserInput = false
+        claudePromptCompletionTimer?.cancel()
         hasSeenCodexAssistantOutputSinceLastUserInput = false
         latestCodexAssistantSummary = ""
         codexCompletionTimer?.cancel()
 
-        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return }
+        guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return true }
         hasObservedUserInput = true
+        return true
     }
 
     // MARK: - Private
@@ -183,6 +194,7 @@ public final class OutputProcessor: @unchecked Sendable {
             if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
             if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
             if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
+            if shouldHandleDeferredPromptCompletion(match, summary: stripped) { return }
             guard !shouldSuppressRepeatedLine(stripped) else { return }
             emitMatchedEvent(match, summary: stripped)
         }
@@ -236,6 +248,12 @@ public final class OutputProcessor: @unchecked Sendable {
         return String(lowered.prefix(120))
     }
 
+    private func consumeBufferedPromptIfNeeded(_ line: String) {
+        if isPromptLikeLine(line) {
+            lineBuffer = ""
+        }
+    }
+
     private func processBufferedCandidate() {
         let stripped = stripper.strip(lineBuffer).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stripped.isEmpty else { return }
@@ -251,11 +269,25 @@ public final class OutputProcessor: @unchecked Sendable {
             || match.rule.eventType == .permissionRequested
             || match.rule.eventType == .taskCompleted
         {
-            if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) { return }
-            if shouldSuppressCompletionForTurnState(match, summary: stripped) { return }
+            if shouldSuppressInteractiveEventBeforeInput(match.rule.eventType) {
+                consumeBufferedPromptIfNeeded(stripped)
+                return
+            }
+            if shouldSuppressCompletionForTurnState(match, summary: stripped) {
+                consumeBufferedPromptIfNeeded(stripped)
+                return
+            }
             if shouldSuppressLikelyMetaOrControlLine(stripped, eventType: match.rule.eventType) { return }
-            if shouldSuppressRepeatedLine(stripped) { return }
+            if shouldHandleDeferredPromptCompletion(match, summary: stripped) {
+                consumeBufferedPromptIfNeeded(stripped)
+                return
+            }
+            if shouldSuppressRepeatedLine(stripped) {
+                consumeBufferedPromptIfNeeded(stripped)
+                return
+            }
             emitMatchedEvent(match, summary: stripped)
+            consumeBufferedPromptIfNeeded(stripped)
         }
 
         observeCodexCompletionActivity(line: stripped, matchedEventType: match?.rule.eventType)
@@ -295,6 +327,7 @@ public final class OutputProcessor: @unchecked Sendable {
         let eventSummary = resolvedEventSummary(for: match, originalSummary: summary)
         if match.rule.eventType == .taskCompleted {
             hasEmittedCompletionSinceLastUserInput = true
+            claudePromptCompletionTimer?.cancel()
             codexCompletionTimer?.cancel()
         }
 
@@ -386,6 +419,24 @@ public final class OutputProcessor: @unchecked Sendable {
         return false
     }
 
+    private func shouldHandleDeferredPromptCompletion(
+        _ match: RuleEngine.MatchResult,
+        summary: String
+    ) -> Bool {
+        guard match.rule.eventType == .taskCompleted else { return false }
+        guard isPromptLikeLine(summary) else { return false }
+
+        switch agentType {
+        case .claude:
+            scheduleClaudePromptCompletion(rule: match.rule)
+            return true
+        case .codex:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func isLikelyLocalInputEcho(_ line: String) -> Bool {
         isLikelyPromptEchoBeforeAssistantOutput(line)
     }
@@ -421,6 +472,10 @@ public final class OutputProcessor: @unchecked Sendable {
         let candidate = summaryCandidate(from: normalizedLine)
         guard !candidate.isEmpty else { return }
         latestCompletionSummary = candidate
+        if agentType == .claude, lastUserInputAt != nil {
+            hasSeenClaudeAssistantOutputSinceLastUserInput = true
+            claudePromptCompletionTimer?.cancel()
+        }
     }
 
     private func resolvedEventSummary(for match: RuleEngine.MatchResult, originalSummary: String) -> String {
@@ -489,6 +544,41 @@ public final class OutputProcessor: @unchecked Sendable {
         scheduleCodexQuietCompletion()
     }
 
+    private func scheduleClaudePromptCompletion(rule: Rule) {
+        guard agentType == .claude else { return }
+        guard lastUserInputAt != nil else { return }
+        guard hasSeenClaudeAssistantOutputSinceLastUserInput else { return }
+        guard !hasEmittedCompletionSinceLastUserInput else { return }
+
+        claudePromptCompletionTimer?.cancel()
+        claudePromptCompletionTimer = Task.detached { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.promptCompletionQuietPeriod * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            guard !self.hasEmittedCompletionSinceLastUserInput else { return }
+            guard self.hasSeenClaudeAssistantOutputSinceLastUserInput else { return }
+
+            self.hasEmittedCompletionSinceLastUserInput = true
+            let summary = self.latestCompletionSummary.isEmpty ? "❯" : self.latestCompletionSummary
+
+            let event = AgentEvent(
+                agentId: self.agentId,
+                agentType: self.agentType,
+                displayLabel: self.displayLabel,
+                eventType: .taskCompleted,
+                summary: summary,
+                matchedRule: rule.name,
+                priority: rule.priority,
+                shouldNotify: rule.triggersNotification,
+                dedupeKey: "\(self.agentId.uuidString)|\(rule.id.uuidString)|\(self.stableKeyFragment(from: summary))",
+                paneId: self.paneId,
+                windowId: self.windowId,
+                sessionName: self.sessionName
+            )
+            self.onEvent(event)
+        }
+    }
+
     private func scheduleCodexQuietCompletion() {
         guard hasSeenCodexAssistantOutputSinceLastUserInput else { return }
         guard !hasEmittedCompletionSinceLastUserInput else { return }
@@ -549,5 +639,54 @@ public final class OutputProcessor: @unchecked Sendable {
             return true
         }
         return false
+    }
+
+    private func containsMeaningfulUserInput(_ data: Data) -> Bool {
+        let bytes = Array(data)
+        var index = 0
+
+        while index < bytes.count {
+            if let ignoredLength = ignoredTerminalReportLength(in: bytes, startingAt: index) {
+                index += ignoredLength
+                continue
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private func ignoredTerminalReportLength(in bytes: [UInt8], startingAt index: Int) -> Int? {
+        let remaining = bytes.count - index
+        guard remaining >= 3 else { return nil }
+        guard bytes[index] == 0x1B, bytes[index + 1] == 0x5B else { return nil }
+
+        switch bytes[index + 2] {
+        case 0x49, 0x4F:
+            return 3
+        default:
+            break
+        }
+
+        var cursor = index + 2
+        while cursor < bytes.count, isASCIIDigit(bytes[cursor]) {
+            cursor += 1
+        }
+        guard cursor > index + 2, cursor < bytes.count, bytes[cursor] == 0x3B else {
+            return nil
+        }
+        cursor += 1
+        let secondNumberStart = cursor
+        while cursor < bytes.count, isASCIIDigit(bytes[cursor]) {
+            cursor += 1
+        }
+        guard cursor > secondNumberStart, cursor < bytes.count, bytes[cursor] == 0x52 else {
+            return nil
+        }
+        return cursor - index + 1
+    }
+
+    private func isASCIIDigit(_ byte: UInt8) -> Bool {
+        byte >= 0x30 && byte <= 0x39
     }
 }
