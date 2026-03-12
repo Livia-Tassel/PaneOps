@@ -443,8 +443,20 @@ public final class OutputProcessor: @unchecked Sendable {
 
     private func isLikelyPromptEchoBeforeAssistantOutput(_ line: String) -> Bool {
         guard let lastUserInputAt else { return false }
+        guard !hasSeenAssistantOutputSinceLastUserInput() else { return false }
         guard Date().timeIntervalSince(lastUserInputAt) <= 0.35 else { return false }
         return isPromptLikeLine(line)
+    }
+
+    private func hasSeenAssistantOutputSinceLastUserInput() -> Bool {
+        switch agentType {
+        case .claude:
+            return hasSeenClaudeAssistantOutputSinceLastUserInput
+        case .codex:
+            return hasSeenCodexAssistantOutputSinceLastUserInput
+        default:
+            return !latestCompletionSummary.isEmpty
+        }
     }
 
     private func isPromptLikeLine(_ line: String) -> Bool {

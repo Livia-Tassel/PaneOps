@@ -468,6 +468,33 @@ final class OutputProcessorTests: XCTestCase {
         XCTAssertEqual(events.value.first?.summary, "Hello.")
     }
 
+    func testClaudePromptCompletionStillFiresForFastResponses() {
+        let expectation = XCTestExpectation(description: "Claude completion fires even when response is fast")
+        let events = LockedBox<[AgentEvent]>([])
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "claude-fast",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15
+        ) { event in
+            events.withLock { $0.append(event) }
+            expectation.fulfill()
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.05)
+        processor.processData("❯\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(events.value.count, 1)
+        XCTAssertEqual(events.value.first?.eventType, .taskCompleted)
+        XCTAssertEqual(events.value.first?.summary, "Hello.")
+    }
+
     func testClaudePromptCompletionIgnoresSeparatorLineSummary() {
         let expectation = XCTestExpectation(description: "Claude completion ignores separator line summary")
         let events = LockedBox<[AgentEvent]>([])
