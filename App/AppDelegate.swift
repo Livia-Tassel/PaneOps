@@ -24,6 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.agentRegistry.acknowledgeEvent(id: eventId)
                 self.ipcService.send(.ack(messageId: eventId))
+            },
+            onSendKeys: { [weak self] paneId, text, enterAfter in
+                guard let self else { return }
+                self.ipcService.send(.sendKeys(SendKeysRequest(
+                    paneId: paneId,
+                    text: text,
+                    enterAfter: enterAfter
+                )))
             }
         )
 

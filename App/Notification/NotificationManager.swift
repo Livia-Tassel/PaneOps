@@ -8,15 +8,18 @@ final class NotificationManager: @unchecked Sendable {
     private var timers: [UUID: Timer] = [:]
     private let configProvider: () -> AppConfig
     private let onAcknowledge: (UUID) -> Void
+    private let onSendKeys: (String, String, Bool) -> Void
     private let horizontalInset: CGFloat = 16
     private let verticalInset: CGFloat = 16
 
     init(
         configProvider: @escaping () -> AppConfig,
-        onAcknowledge: @escaping (UUID) -> Void = { _ in }
+        onAcknowledge: @escaping (UUID) -> Void = { _ in },
+        onSendKeys: @escaping (String, String, Bool) -> Void = { _, _, _ in }
     ) {
         self.configProvider = configProvider
         self.onAcknowledge = onAcknowledge
+        self.onSendKeys = onSendKeys
     }
 
     /// Must be called on main thread.
@@ -131,6 +134,11 @@ final class NotificationManager: @unchecked Sendable {
                         self?.acknowledgeAndDismiss(eventId: event.id)
                     }
                 }
+            },
+            onSendKeys: { [weak self] paneId, text, enterAfter in
+                DispatchQueue.main.async {
+                    self?.onSendKeys(paneId, text, enterAfter)
+                }
             }
         )
         panel?.alphaValue = 0
@@ -163,7 +171,7 @@ final class NotificationManager: @unchecked Sendable {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let visible = screen.visibleFrame
         let width = panel.frame.width
-        let height = panel.preferredHeight(for: eventCount)
+        let height = panel.preferredHeight(for: events)
         let x = visible.maxX - width - horizontalInset
         let y = visible.maxY - height - verticalInset
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
