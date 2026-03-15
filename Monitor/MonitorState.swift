@@ -5,8 +5,7 @@ actor MonitorState {
     private var config: AppConfig
     private var agents: [UUID: AgentInstance]
     private var events: [AgentEvent]
-    private var dedupeSeenAt: [String: Date] = [:]
-    private var stallAlertedAgentIDs: Set<UUID> = []
+    private var deduplicator = EventDeduplicator()
     private var paneSupersededAgentIDs: Set<UUID> = []
     private var subscribers: [UUID: IPCServer.ClientConnection] = [:]
 
@@ -64,7 +63,7 @@ actor MonitorState {
             self.agents[agent.id]?.lastActiveAt = now
             changed = true
 
-            let event = Self.makeExpirationEvent(for: agent, reason: reason, at: now)
+            let event = PaneCollapsePolicy.makeExpirationEvent(for: agent, reason: reason, at: now)
             generated.append(event)
         }
 
@@ -118,7 +117,7 @@ actor MonitorState {
 
             let collapsed = collapseActiveAgentsSharingPane(with: updated, now: now)
             agents[agent.id] = updated
-            stallAlertedAgentIDs.remove(agent.id)
+            deduplicator.clearStallAlert(for: agent.id)
             paneSupersededAgentIDs.remove(agent.id)
             trimEventsIfNeeded()
             saveAgents()
@@ -153,10 +152,11 @@ actor MonitorState {
 
             guard previousStatus != agent.status else { break }
 
-            stallAlertedAgentIDs.remove(agentId)
-            let ackedIds = acknowledgeRecoveredAgentEvents(
+            deduplicator.clearStallAlert(for: agentId)
+            let ackedIds = AcknowledgmentPolicy.acknowledgeRecovered(
                 agentId: agentId,
-                eventTypes: [.stalledOrWaiting]
+                eventTypes: [.stalledOrWaiting],
+                in: &events
             )
             saveAgents()
             if !ackedIds.isEmpty {
@@ -174,11 +174,12 @@ actor MonitorState {
 
             agent.recordResume(at: nowProvider())
             agents[agentId] = agent
-            stallAlertedAgentIDs.remove(agentId)
+            deduplicator.clearStallAlert(for: agentId)
 
-            let ackedIds = acknowledgeRecoveredAgentEvents(
+            let ackedIds = AcknowledgmentPolicy.acknowledgeRecovered(
                 agentId: agentId,
-                eventTypes: [.stalledOrWaiting, .inputRequested, .permissionRequested]
+                eventTypes: [.stalledOrWaiting, .inputRequested, .permissionRequested],
+                in: &events
             )
             saveAgents()
             if !ackedIds.isEmpty {
@@ -191,13 +192,13 @@ actor MonitorState {
 
         case .event(let event):
             guard !paneSupersededAgentIDs.contains(event.agentId) else { return }
-            guard shouldAccept(event: event) else { return }
+            guard deduplicator.shouldAccept(event: event, config: config, now: nowProvider()) else { return }
 
             var accepted = event
             if accepted.eventType == .taskCompleted || !accepted.shouldNotify {
                 accepted.acknowledged = true
             }
-            updateStallAlertGate(for: accepted)
+            deduplicator.updateStallAlertGate(for: accepted)
 
             apply(event: accepted)
             events.append(accepted)
@@ -230,7 +231,7 @@ actor MonitorState {
                     acknowledged: true
                 )
 
-                if shouldAccept(event: completionEvent) {
+                if deduplicator.shouldAccept(event: completionEvent, config: config, now: now) {
                     completionEvent.acknowledged = true
                     apply(event: completionEvent)
                     events.append(completionEvent)
@@ -244,9 +245,9 @@ actor MonitorState {
                 agents[agentId]?.status = (exitCode == 0) ? .completed : .errored
                 agents[agentId]?.lastActiveAt = now
             }
-            stallAlertedAgentIDs.remove(agentId)
+            deduplicator.clearStallAlert(for: agentId)
             paneSupersededAgentIDs.remove(agentId)
-            let ackedIds = acknowledgeEndedAgentEvents(agentId: agentId)
+            let ackedIds = AcknowledgmentPolicy.acknowledgeEndedAgent(agentId, in: &events)
             saveAgents()
             if !ackedIds.isEmpty {
                 persistEventsSnapshot()
@@ -280,9 +281,15 @@ actor MonitorState {
             await broadcast(.snapshot(currentSnapshot()))
 
         case .ack(let messageId):
-            if acknowledgeEvent(id: messageId) {
+            if AcknowledgmentPolicy.acknowledge(eventId: messageId, in: &events) {
                 persistEventsSnapshot()
                 await broadcast(.ack(messageId: messageId))
+            }
+
+        case .sendKeys(let request):
+            let success = tmux.sendKeys(to: request.paneId, text: request.text, enterAfter: request.enterAfter)
+            if !success {
+                SentinelLogger.tmux.warning("sendKeys failed for pane \(request.paneId)")
             }
 
         case .snapshot:
@@ -310,12 +317,12 @@ actor MonitorState {
             stateChanged = true
 
             let event = expirationEvent(for: agent, reason: reason, at: now)
-            if shouldAccept(event: event) {
+            if deduplicator.shouldAccept(event: event, config: config, now: now) {
                 events.append(event)
                 generated.append(event)
                 try? eventStore.append(event)
             }
-            ackedIds.append(contentsOf: acknowledgeEndedAgentEvents(agentId: agent.id))
+            ackedIds.append(contentsOf: AcknowledgmentPolicy.acknowledgeEndedAgent(agent.id, in: &events))
         }
 
         if stateChanged || !ackedIds.isEmpty {
@@ -332,80 +339,32 @@ actor MonitorState {
             await broadcast(.event(event))
         }
 
-        cleanupDedupeMap(now: now)
+        deduplicator.cleanup(now: now, dedupeWindowSeconds: config.eventDedupeWindowSeconds)
     }
 
     // MARK: - Event semantics
 
-    private func shouldAccept(event: AgentEvent) -> Bool {
-        if event.eventType == .stalledOrWaiting,
-           event.matchedRule == "stall-detection",
-           stallAlertedAgentIDs.contains(event.agentId) {
-            return false
-        }
-
-        let now = nowProvider()
-        let dedupeKey = canonicalDedupeKey(for: event)
-        let window: TimeInterval
-        switch event.eventType {
-        case .stalledOrWaiting:
-            window = max(60, config.eventDedupeWindowSeconds)
-        case .taskCompleted:
-            // Keep completion notifications responsive for rapid Q&A turns.
-            window = 1
-        case .permissionRequested, .inputRequested, .errorDetected:
-            window = config.eventDedupeWindowSeconds
-        }
-
-        if let seenAt = dedupeSeenAt[dedupeKey], now.timeIntervalSince(seenAt) < window {
-            return false
-        }
-        dedupeSeenAt[dedupeKey] = now
-        return true
-    }
-
-    private func updateStallAlertGate(for event: AgentEvent) {
-        if event.eventType == .stalledOrWaiting, event.matchedRule == "stall-detection" {
-            stallAlertedAgentIDs.insert(event.agentId)
-            return
-        }
-        stallAlertedAgentIDs.remove(event.agentId)
-    }
-
-    private func canonicalDedupeKey(for event: AgentEvent) -> String {
-        let pane = event.paneId.isEmpty ? "none" : event.paneId
-        let canonicalSummary = EventPolicy.canonicalSummary(event.summary)
-        return "\(event.agentId.uuidString)|\(event.eventType.rawValue)|\(pane)|\(canonicalSummary)"
-    }
-
     private func collapseActiveAgentsSharingPane(with incoming: AgentInstance, now: Date) -> (generatedEvents: [AgentEvent], ackedEventIDs: [UUID]) {
-        guard !incoming.paneId.isEmpty else { return ([], []) }
+        let candidates = PaneCollapsePolicy.agentsToCollapse(incoming: incoming, agents: agents)
+        guard !candidates.isEmpty else { return ([], []) }
 
         var generatedEvents: [AgentEvent] = []
         var ackedEventIDs: [UUID] = []
-        let candidates = agents.values
-            .filter { candidate in
-                candidate.id != incoming.id
-                    && candidate.status.isActive
-                    && !candidate.paneId.isEmpty
-                    && candidate.paneId == incoming.paneId
-            }
-            .sorted { $0.startedAt > $1.startedAt }
 
         for candidate in candidates {
             agents[candidate.id]?.status = .expired
             agents[candidate.id]?.lastActiveAt = now
-            stallAlertedAgentIDs.remove(candidate.id)
+            deduplicator.clearStallAlert(for: candidate.id)
             paneSupersededAgentIDs.insert(candidate.id)
 
-            var replacementEvent = Self.makePaneReplacementEvent(for: candidate, replacement: incoming, at: now)
-            if shouldAccept(event: replacementEvent) {
+            var replacementEvent = PaneCollapsePolicy.makePaneReplacementEvent(for: candidate, replacement: incoming, at: now)
+            if deduplicator.shouldAccept(event: replacementEvent, config: config, now: now) {
                 replacementEvent.acknowledged = true
                 events.append(replacementEvent)
                 generatedEvents.append(replacementEvent)
                 try? eventStore.append(replacementEvent)
             }
-            ackedEventIDs.append(contentsOf: acknowledgeEndedAgentEvents(agentId: candidate.id))
+            ackedEventIDs.append(contentsOf: AcknowledgmentPolicy.acknowledgeEndedAgent(candidate.id, in: &events))
         }
 
         return (generatedEvents, ackedEventIDs)
@@ -434,57 +393,7 @@ actor MonitorState {
     }
 
     private func expirationEvent(for agent: AgentInstance, reason: AgentExpirationReason, at now: Date) -> AgentEvent {
-        Self.makeExpirationEvent(for: agent, reason: reason, at: now)
-    }
-
-    private static func makeExpirationEvent(for agent: AgentInstance, reason: AgentExpirationReason, at now: Date) -> AgentEvent {
-        let reasonText: String
-        switch reason {
-        case .paneMissing:
-            reasonText = "pane \(agent.paneId) no longer exists"
-        case .sessionMissing:
-            reasonText = "session \(agent.sessionName) no longer exists"
-        case .heartbeatTimeout:
-            reasonText = "heartbeat inactive for too long"
-        case .noContextTimeout:
-            reasonText = "agent context is stale"
-        }
-
-        return AgentEvent(
-            agentId: agent.id,
-            agentType: agent.agentType,
-            displayLabel: agent.displayLabel,
-            eventType: .stalledOrWaiting,
-            summary: "Agent expired: \(reasonText)",
-            matchedRule: "monitor-expire-\(reason.rawValue)",
-            priority: .normal,
-            shouldNotify: false,
-            dedupeKey: "\(agent.id.uuidString)|expired|\(reason.rawValue)",
-            timestamp: now,
-            paneId: agent.paneId,
-            windowId: agent.windowId,
-            sessionName: agent.sessionName,
-            acknowledged: true
-        )
-    }
-
-    private static func makePaneReplacementEvent(for agent: AgentInstance, replacement: AgentInstance, at now: Date) -> AgentEvent {
-        AgentEvent(
-            agentId: agent.id,
-            agentType: agent.agentType,
-            displayLabel: agent.displayLabel,
-            eventType: .stalledOrWaiting,
-            summary: "Agent expired: superseded by newer registration on pane \(agent.paneId)",
-            matchedRule: "monitor-expire-paneReplaced",
-            priority: .normal,
-            shouldNotify: false,
-            dedupeKey: "\(agent.id.uuidString)|expired|paneReplaced|\(replacement.id.uuidString)",
-            timestamp: now,
-            paneId: agent.paneId,
-            windowId: agent.windowId,
-            sessionName: agent.sessionName,
-            acknowledged: true
-        )
+        PaneCollapsePolicy.makeExpirationEvent(for: agent, reason: reason, at: now)
     }
 
     // MARK: - Snapshot / persistence
@@ -523,46 +432,6 @@ actor MonitorState {
         }
     }
 
-    private func cleanupDedupeMap(now: Date) {
-        let threshold = now.addingTimeInterval(-max(config.eventDedupeWindowSeconds * 12, 300))
-        dedupeSeenAt = dedupeSeenAt.filter { $0.value >= threshold }
-    }
-
-    private func acknowledgeEvent(id: UUID) -> Bool {
-        guard let index = events.firstIndex(where: { $0.id == id }) else { return false }
-        guard !events[index].acknowledged else { return false }
-        events[index].acknowledged = true
-        return true
-    }
-
-    private func acknowledgeEndedAgentEvents(agentId: UUID) -> [UUID] {
-        var acked: [UUID] = []
-        for index in events.indices {
-            guard events[index].agentId == agentId else { continue }
-            guard !events[index].acknowledged else { continue }
-            switch events[index].eventType {
-            case .stalledOrWaiting, .inputRequested, .permissionRequested:
-                events[index].acknowledged = true
-                acked.append(events[index].id)
-            case .taskCompleted, .errorDetected:
-                break
-            }
-        }
-        return acked
-    }
-
-    private func acknowledgeRecoveredAgentEvents(agentId: UUID, eventTypes: Set<EventType>) -> [UUID] {
-        var acked: [UUID] = []
-        for index in events.indices {
-            guard events[index].agentId == agentId else { continue }
-            guard !events[index].acknowledged else { continue }
-            guard eventTypes.contains(events[index].eventType) else { continue }
-            events[index].acknowledged = true
-            acked.append(events[index].id)
-        }
-        return acked
-    }
-
     private func persistEventsSnapshot() {
         trimEventsIfNeeded()
         try? eventStore.rewrite(events)
@@ -593,21 +462,20 @@ actor MonitorState {
 
         case .clearEventHistory:
             events.removeAll()
-            dedupeSeenAt.removeAll()
+            deduplicator.clearAll()
             try eventStore.rewrite([])
 
         case .clearAgentCache:
             agents.removeAll()
-            stallAlertedAgentIDs.removeAll()
+            deduplicator.clearAll()
             saveAgents()
 
         case .clearAll:
             events.removeAll()
-            dedupeSeenAt.removeAll()
+            deduplicator.clearAll()
             try eventStore.rewrite([])
 
             agents.removeAll()
-            stallAlertedAgentIDs.removeAll()
             saveAgents()
 
             try LocalDataMaintenance.clearLogs()

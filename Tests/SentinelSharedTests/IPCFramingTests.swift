@@ -220,4 +220,21 @@ final class IPCFramingTests: XCTestCase {
             }
         }
     }
+
+    func testRoundtripSendKeys() throws {
+        let request = SendKeysRequest(paneId: "%7", text: "y", enterAfter: true)
+        let message = IPCMessage.sendKeys(request)
+
+        let encoded = try IPCFraming.encode(message)
+        let (decoded, consumed) = try XCTUnwrap(IPCFraming.decode(from: encoded))
+
+        XCTAssertEqual(consumed, encoded.count)
+        if case .sendKeys(let decodedRequest) = decoded {
+            XCTAssertEqual(decodedRequest.paneId, "%7")
+            XCTAssertEqual(decodedRequest.text, "y")
+            XCTAssertTrue(decodedRequest.enterAfter)
+        } else {
+            XCTFail("Expected sendKeys message")
+        }
+    }
 }

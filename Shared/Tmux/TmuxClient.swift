@@ -141,6 +141,21 @@ public struct TmuxClient: Sendable {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Send literal text to a tmux pane via `send-keys`.
+    /// Uses `-l` flag to prevent tmux key-name interpretation (safe against injection).
+    /// Optionally sends `Enter` as a separate command afterward.
+    @discardableResult
+    public func sendKeys(to paneId: String, text: String, enterAfter: Bool = true) -> Bool {
+        guard !paneId.isEmpty else { return false }
+        let textResult = runTmux(["send-keys", "-t", paneId, "-l", "--", text])
+        guard textResult.exitCode == 0 else { return false }
+        if enterAfter {
+            let enterResult = runTmux(["send-keys", "-t", paneId, "Enter"])
+            return enterResult.exitCode == 0
+        }
+        return true
+    }
+
     // MARK: - Private
 
     private func parsePaneLine(_ line: String) -> PaneInfo? {

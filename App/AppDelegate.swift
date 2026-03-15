@@ -95,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .subscribe:
             break
+
+        case .sendKeys:
+            break // App never receives this; Monitor-only
         }
     }
 

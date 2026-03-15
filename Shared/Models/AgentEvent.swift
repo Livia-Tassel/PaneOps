@@ -17,6 +17,7 @@ public struct AgentEvent: Codable, Identifiable, Sendable {
     public let windowId: String
     public let sessionName: String
     public var acknowledged: Bool
+    public let contextLines: [String]?
 
     public init(
         id: UUID = UUID(),
@@ -33,7 +34,8 @@ public struct AgentEvent: Codable, Identifiable, Sendable {
         paneId: String = "",
         windowId: String = "",
         sessionName: String = "",
-        acknowledged: Bool = false
+        acknowledged: Bool = false,
+        contextLines: [String]? = nil
     ) {
         self.id = id
         self.agentId = agentId
@@ -54,6 +56,7 @@ public struct AgentEvent: Codable, Identifiable, Sendable {
         self.windowId = windowId
         self.sessionName = sessionName
         self.acknowledged = acknowledged
+        self.contextLines = contextLines
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -72,6 +75,7 @@ public struct AgentEvent: Codable, Identifiable, Sendable {
         case windowId
         case sessionName
         case acknowledged
+        case contextLines
     }
 
     public init(from decoder: Decoder) throws {
@@ -92,6 +96,7 @@ public struct AgentEvent: Codable, Identifiable, Sendable {
         self.windowId = try c.decodeIfPresent(String.self, forKey: .windowId) ?? ""
         self.sessionName = try c.decodeIfPresent(String.self, forKey: .sessionName) ?? ""
         self.acknowledged = try c.decodeIfPresent(Bool.self, forKey: .acknowledged) ?? false
+        self.contextLines = try c.decodeIfPresent([String].self, forKey: .contextLines)
     }
 
     /// Sanitize summary: trim whitespace, truncate to 200 chars.

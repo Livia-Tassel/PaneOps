@@ -27,6 +27,18 @@ public struct MonitorSnapshot: Codable, Sendable {
     }
 }
 
+public struct SendKeysRequest: Codable, Sendable {
+    public let paneId: String
+    public let text: String
+    public let enterAfter: Bool
+
+    public init(paneId: String, text: String, enterAfter: Bool = true) {
+        self.paneId = paneId
+        self.text = text
+        self.enterAfter = enterAfter
+    }
+}
+
 /// Messages exchanged between wrapper/app and the monitor daemon.
 public enum IPCMessage: Codable, Sendable {
     case register(AgentInstance)
@@ -40,6 +52,7 @@ public enum IPCMessage: Codable, Sendable {
     case ack(messageId: UUID)
     case configUpdate(AppConfig)
     case maintenance(MaintenanceRequest)
+    case sendKeys(SendKeysRequest)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -58,6 +71,7 @@ public enum IPCMessage: Codable, Sendable {
         case ack
         case configUpdate
         case maintenance
+        case sendKeys
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -96,6 +110,9 @@ public enum IPCMessage: Codable, Sendable {
         case .maintenance(let request):
             try container.encode(MessageType.maintenance, forKey: .type)
             try container.encode(request, forKey: .payload)
+        case .sendKeys(let request):
+            try container.encode(MessageType.sendKeys, forKey: .type)
+            try container.encode(request, forKey: .payload)
         }
     }
 
@@ -130,6 +147,8 @@ public enum IPCMessage: Codable, Sendable {
             self = .configUpdate(try container.decode(AppConfig.self, forKey: .payload))
         case .maintenance:
             self = .maintenance(try container.decode(MaintenanceRequest.self, forKey: .payload))
+        case .sendKeys:
+            self = .sendKeys(try container.decode(SendKeysRequest.self, forKey: .payload))
         }
     }
 }

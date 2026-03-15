@@ -39,6 +39,65 @@ final class TmuxClientTests: XCTestCase {
         )
         XCTAssertEqual(resolved, "/custom/bin/tmux")
     }
+    func testSendKeysCallsTmuxWithCorrectArguments() {
+        let calls = LockedCalls()
+        let runner = MockTmuxRunner { _, arguments in
+            calls.append(arguments)
+            return CommandResult(stdout: "", stderr: "", exitCode: 0)
+        }
+        let tmux = TmuxClient(runner: runner, tmuxExecutable: "/opt/homebrew/bin/tmux")
+        let result = tmux.sendKeys(to: "%5", text: "y")
+
+        XCTAssertTrue(result)
+        let recorded = calls.all
+        XCTAssertEqual(recorded.count, 2)
+        XCTAssertEqual(recorded[0], ["send-keys", "-t", "%5", "-l", "--", "y"])
+        XCTAssertEqual(recorded[1], ["send-keys", "-t", "%5", "Enter"])
+    }
+
+    func testSendKeysReturnsFalseForEmptyPaneId() {
+        let runner = MockTmuxRunner { _, _ in
+            CommandResult(stdout: "", stderr: "", exitCode: 0)
+        }
+        let tmux = TmuxClient(runner: runner, tmuxExecutable: "/opt/homebrew/bin/tmux")
+        XCTAssertFalse(tmux.sendKeys(to: "", text: "y"))
+    }
+
+    func testSendKeysWithoutEnterSendsOnlyText() {
+        let calls = LockedCalls()
+        let runner = MockTmuxRunner { _, arguments in
+            calls.append(arguments)
+            return CommandResult(stdout: "", stderr: "", exitCode: 0)
+        }
+        let tmux = TmuxClient(runner: runner, tmuxExecutable: "/opt/homebrew/bin/tmux")
+        let result = tmux.sendKeys(to: "%3", text: "hello", enterAfter: false)
+
+        XCTAssertTrue(result)
+        let recorded = calls.all
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0], ["send-keys", "-t", "%3", "-l", "--", "hello"])
+    }
+
+    func testSendKeysReturnsFalseOnTmuxFailure() {
+        let runner = MockTmuxRunner { _, _ in
+            CommandResult(stdout: "", stderr: "pane not found", exitCode: 1)
+        }
+        let tmux = TmuxClient(runner: runner, tmuxExecutable: "/opt/homebrew/bin/tmux")
+        XCTAssertFalse(tmux.sendKeys(to: "%99", text: "y"))
+    }
+}
+
+private final class LockedCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [[String]] = []
+
+    func append(_ args: [String]) {
+        lock.withLock { _calls.append(args) }
+    }
+
+    var all: [[String]] {
+        lock.withLock { _calls }
+    }
 }
 
 private final class MockTmuxRunner: CommandRunning, @unchecked Sendable {

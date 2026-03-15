@@ -971,6 +971,79 @@ final class OutputProcessorTests: XCTestCase {
 
         XCTAssertEqual(events.value.count, 1)
     }
+    func testPermissionEventIncludesContextLines() {
+        let expectation = XCTestExpectation(description: "Permission event with context")
+        let receivedEvent = LockedBox<AgentEvent?>(nil)
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "ctx-test",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            receivedEvent.withLock { $0 = event }
+            expectation.fulfill()
+        }
+
+        processor.processData("Building project...\nRunning tests...\n".data(using: .utf8)!)
+        processor.processData("Do you want to proceed? (y/n)\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 2.0)
+        XCTAssertNotNil(receivedEvent.value?.contextLines)
+        XCTAssertTrue(receivedEvent.value!.contextLines!.count >= 2)
+    }
+
+    func testContextLinesRingBufferCapsAtFiveLines() {
+        let expectation = XCTestExpectation(description: "Context caps at 5")
+        let receivedEvent = LockedBox<AgentEvent?>(nil)
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "ctx-cap",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            if event.eventType == .permissionRequested {
+                receivedEvent.withLock { $0 = event }
+                expectation.fulfill()
+            }
+        }
+
+        for i in 1...10 {
+            processor.processData("Line \(i) of output\n".data(using: .utf8)!)
+        }
+        processor.processData("Do you want to proceed? (y/n)\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 2.0)
+        XCTAssertNotNil(receivedEvent.value?.contextLines)
+        XCTAssertEqual(receivedEvent.value!.contextLines!.count, 5)
+    }
+
+    func testContextLinesNilForErrorEvents() {
+        let expectation = XCTestExpectation(description: "Error event no context")
+        let receivedEvent = LockedBox<AgentEvent?>(nil)
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .custom,
+            displayLabel: "ctx-err",
+            rules: rules,
+            stallTimeout: 999
+        ) { event in
+            receivedEvent.withLock { $0 = event }
+            expectation.fulfill()
+        }
+
+        processor.processData("Some output\nfatal: repository not found\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 2.0)
+        XCTAssertNil(receivedEvent.value?.contextLines)
+    }
 }
 
 private final class LockedBox<T>: @unchecked Sendable {
