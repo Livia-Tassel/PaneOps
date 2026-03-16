@@ -1,4 +1,4 @@
-.PHONY: sync-version build build-cli build-app build-monitor release dist pkg install install-cli install-monitor install-app up down status logs test clean format help
+.PHONY: run stop sync-version build build-cli build-app build-monitor release dist pkg dmg install install-cli install-monitor install-app up down status logs test clean format help
 
 BUILD_DIR := .build-agent-sentinel
 CLI_NAME := agent-sentinel
@@ -21,6 +21,48 @@ MONITOR_STARTUP_RETRIES := 100
 MONITOR_STARTUP_SLEEP := 0.2
 SWIFT_BUILD := swift build --build-path $(BUILD_DIR)
 SWIFT_TEST := swift test --build-path $(BUILD_DIR)
+
+# Default target: build and start locally (no install needed)
+run: build
+	@mkdir -p $(LOG_DIR)
+	@if pgrep -f '(^|/)$(MONITOR_NAME)$$' >/dev/null 2>&1; then \
+		echo "$(MONITOR_NAME) already running (use 'make stop' first to restart)"; \
+	else \
+		nohup $(BUILD_DIR)/debug/$(MONITOR_NAME) >$(MONITOR_LOG) 2>&1 & \
+		echo "Started $(MONITOR_NAME) from build dir"; \
+	fi
+	@for i in $$(seq 1 $(MONITOR_STARTUP_RETRIES)); do \
+		[ -S "$(SOCKET_PATH)" ] && break; \
+		sleep $(MONITOR_STARTUP_SLEEP); \
+	done
+	@if ! pgrep -f '(^|/)$(MONITOR_NAME)$$' >/dev/null 2>&1; then \
+		echo "Monitor failed to start. Check: make logs"; \
+		exit 1; \
+	fi
+	@if [ ! -S "$(SOCKET_PATH)" ]; then \
+		echo "Monitor socket not ready. Check: make logs"; \
+		exit 1; \
+	fi
+	@if pgrep -f '(^|/)$(APP_BINARY)$$' >/dev/null 2>&1; then \
+		echo "$(APP_BINARY) already running"; \
+	else \
+		nohup $(BUILD_DIR)/debug/$(APP_BINARY) >$(APP_LOG) 2>&1 & \
+		echo "Started $(APP_BINARY) from build dir"; \
+	fi
+	@sleep 0.3
+	@if pgrep -f '(^|/)$(APP_BINARY)$$' >/dev/null 2>&1; then \
+		echo "Ready. Use 'make stop' to shut down, 'make logs' for diagnostics."; \
+	else \
+		echo "App failed to start. Check: make logs"; \
+		exit 1; \
+	fi
+
+# Stop monitor + app (works for both 'run' and 'up')
+stop:
+	@pkill -f '(^|/)$(MONITOR_NAME)$$' >/dev/null 2>&1 || true
+	@pkill -f '(^|/)$(APP_LAUNCH_NAME)$$|(^|/)$(APP_BINARY)$$' >/dev/null 2>&1 || true
+	@rm -f $(SOCKET_PATH)
+	@echo "Stopped"
 
 sync-version:
 	@bash ./scripts/sync_version.sh
@@ -57,6 +99,10 @@ dist:
 # Build macOS installer package (.pkg)
 pkg:
 	@BUILD_DIR=$(BUILD_DIR) ./scripts/build_pkg.sh
+
+# Build macOS disk image (.dmg)
+dmg:
+	@BUILD_DIR=$(BUILD_DIR) ./scripts/build_dmg.sh
 
 # Install all binaries (CLI + monitor + app bundle + launcher)
 install: release install-cli install-monitor install-app
@@ -199,21 +245,27 @@ format:
 
 # Show help
 help:
-	@echo "Available targets:"
+	@echo "Quick start:"
+	@echo "  make       - Build and start locally (no install needed)"
+	@echo "  make stop  - Stop monitor + app"
+	@echo ""
+	@echo "Development:"
 	@echo "  build      - Build all targets (debug)"
-	@echo "  build-cli  - Build CLI only"
-	@echo "  build-app  - Build App only"
-	@echo "  build-monitor - Build monitor daemon only"
-	@echo "  release    - Build all targets (release)"
-	@echo "  dist       - Build release bundle + tar.gz under dist/"
-	@echo "  pkg        - Build unsigned macOS installer package under dist/"
-	@echo "  install    - Install CLI + monitor + app launcher to $(INSTALL_DIR)"
-	@echo "  up         - Start monitor + app in background"
-	@echo "  down       - Stop monitor + app"
+	@echo "  test       - Run all tests"
 	@echo "  status     - Show monitor + app process status"
 	@echo "  logs       - Show recent monitor/app logs"
-	@echo "  test       - Run all tests"
 	@echo "  clean      - Clean build artifacts"
 	@echo "  format     - Format code with swift-format"
+	@echo ""
+	@echo "Distribution:"
+	@echo "  release    - Build all targets (release)"
+	@echo "  dmg        - Build macOS disk image (.dmg)"
+	@echo "  pkg        - Build unsigned macOS installer package (.pkg)"
+	@echo "  dist       - Build release bundle + tar.gz"
+	@echo ""
+	@echo "Install (requires sudo):"
+	@echo "  install    - Install CLI + monitor + app to system paths"
+	@echo "  up         - Start installed monitor + app"
+	@echo "  down       - Stop installed monitor + app"
 	@echo ""
 	@echo "Current version: $(VERSION)"

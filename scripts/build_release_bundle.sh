@@ -37,7 +37,10 @@ else
 fi
 
 echo "==> Preparing release directory"
-rm -rf "${RELEASE_DIR}"
+if [[ -d "${RELEASE_DIR}" ]]; then
+  chmod -R u+rwx "${RELEASE_DIR}" 2>/dev/null || true
+  rm -rf "${RELEASE_DIR}"
+fi
 mkdir -p "${RELEASE_DIR}/bin" "${APP_MACOS}" "${APP_RESOURCES}" "${RELEASE_DIR}/docs"
 
 cp "${ROOT_DIR}/${BUILD_DIR}/release/agent-sentinel" "${RELEASE_DIR}/bin/agent-sentinel"
