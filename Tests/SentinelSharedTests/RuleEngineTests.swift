@@ -216,4 +216,39 @@ final class RuleEngineTests: XCTestCase {
         let match = engine.match(line: "> quoted text", agentType: .claude, agentId: agentId)
         XCTAssertTrue(match == nil || match?.rule.eventType != .taskCompleted)
     }
+
+    func testClaudePermissionDetectsDoYouWantToProceed() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Do you want to proceed? (y/n)", agentType: .claude, agentId: agentId)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsAllowToolFormat() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Allow tool call?", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsAllowOnceFormat() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Allow once for this session", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testUniversalPermissionDetectsDoYouWantToRun() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Do you want to run this command?", agentType: .custom, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
 }
