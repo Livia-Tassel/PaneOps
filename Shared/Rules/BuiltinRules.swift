@@ -33,20 +33,20 @@ public enum BuiltinRules {
                     kind: .regex,
                     value: "(?i)\\b(allow|approve|confirm|proceed|deny|permission|grant)\\b[^\\n]{0,200}(yes\\s*/\\s*no|y\\s*/\\s*n|yes/no|y/n|\\[\\s*y\\s*/\\s*n\\s*\\]|\\(\\s*y\\s*/\\s*n\\s*\\))"
                 ),
-                // Claude Code tool-use format: "Allow tool" / "Allow once"
+                // Claude Code tool-use format: "Allow tool" / "Allow once" / "Allow Read" / "Allow Bash"
                 RulePattern(
                     kind: .regex,
-                    value: "(?i)\\ballow\\s+(tool|once|for\\s+session|always)\\b"
+                    value: "(?i)\\ballow\\s+(tool|once|for\\s+session|always|read|write|edit|bash|glob|grep|notebook|web\\w*|mcp_\\w+)\\b"
                 ),
                 // Direct question with (Y/n) or (yes/no) at end of line
                 RulePattern(
                     kind: .regex,
                     value: "(?i)\\?\\s*\\(?\\s*(y(es)?\\s*/\\s*n(o)?|n(o)?\\s*/\\s*y(es)?)\\s*\\)?\\s*$"
                 ),
-                // "Do you want to" question patterns (common permission phrasing)
+                // "Do you want to" / "Would you like to" question patterns
                 RulePattern(
                     kind: .regex,
-                    value: "(?i)do you want to (proceed|allow|continue|run|execute|approve|accept)"
+                    value: "(?i)(do you want|would you like) to (proceed|allow|continue|run|execute|approve|accept)"
                 ),
             ],
             eventType: .permissionRequested,
@@ -201,7 +201,7 @@ public enum BuiltinRules {
             name: "Universal: Permission question",
             agentType: nil,
             patterns: [
-                RulePattern(kind: .regex, value: "(?i)do you want to (proceed|allow|continue|run|execute)\\??"),
+                RulePattern(kind: .regex, value: "(?i)(do you want|would you like) to (proceed|allow|continue|run|execute)\\??"),
                 RulePattern(kind: .regex, value: "(?i)\\?\\s*\\(?\\s*(y(es)?\\s*/\\s*n(o)?)\\s*\\)?\\s*$"),
             ],
             eventType: .permissionRequested,

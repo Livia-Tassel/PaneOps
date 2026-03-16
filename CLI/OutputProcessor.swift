@@ -61,7 +61,7 @@ public final class OutputProcessor: @unchecked Sendable {
         suppressInteractiveUntilFirstInput: Bool = false,
         promptCompletionQuietPeriod: TimeInterval = 0.6,
         codexCompletionQuietPeriod: TimeInterval = 3,
-        outputSilenceCompletionSeconds: TimeInterval = 5,
+        outputSilenceCompletionSeconds: TimeInterval = 2,
         onEvent: @escaping @Sendable (AgentEvent) -> Void
     ) {
         self.agentId = agentId
@@ -498,7 +498,12 @@ public final class OutputProcessor: @unchecked Sendable {
             "内置示例", "匹配规则", "关键词", "正则", "事件类型", "提示词",
         ]
         if metaMarkers.contains(where: { lowered.contains($0) }) { return true }
-        if lowered.contains("allow|") || lowered.contains("|allow") || lowered.contains("proceed|") { return true }
+        // Suppress pipe-delimited option lists (e.g. "allow|proceed|deny") but not
+        // actual permission prompts that start with "Allow" (e.g. "Allow Read /path")
+        let trimmedLower = lowered.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLower.hasPrefix("allow") {
+            if lowered.contains("allow|") || lowered.contains("|allow") || lowered.contains("proceed|") { return true }
+        }
         return false
     }
 

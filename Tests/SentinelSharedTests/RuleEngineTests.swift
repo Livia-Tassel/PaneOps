@@ -251,4 +251,76 @@ final class RuleEngineTests: XCTestCase {
         XCTAssertNotNil(match)
         XCTAssertEqual(match?.rule.eventType, .permissionRequested)
     }
+
+    func testClaudePermissionDetectsAllowReadFormat() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Allow Read /Users/tassel/README.md", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsAllowBashFormat() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Allow Bash(ls -la /tmp)", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsAllowMcpTool() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Allow mcp__plugin_context7__query-docs", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsAllowWriteFormat() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Allow Write /path/to/file.swift", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsWouldYouLikeTo() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Would you like to run this command?", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testClaudePermissionDetectsWouldYouLikeToAllow() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Would you like to allow this tool call?", agentType: .claude, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testUniversalPermissionDetectsWouldYouLikeTo() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "Would you like to execute the build?", agentType: .custom, agentId: agentId)
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.rule.eventType, .permissionRequested)
+    }
+
+    func testAllowReadDoesNotFalsePositiveOnNarrative() {
+        let engine = RuleEngine(rules: RuleEngine.effectiveRules(config: AppConfig()))
+        let agentId = UUID()
+
+        let match = engine.match(line: "This will allow reading the configuration file.", agentType: .claude, agentId: agentId)
+        // "allow reading" should NOT match because "reading" is not a tool name
+        XCTAssertTrue(match == nil || match?.rule.eventType != .permissionRequested)
+    }
 }
