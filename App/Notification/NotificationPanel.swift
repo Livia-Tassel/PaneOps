@@ -46,6 +46,10 @@ final class NotificationPanel: NSPanel {
         contentView = hostingView
     }
 
+    /// Allow the panel to accept keyboard input for the reply TextField
+    /// without stealing app activation from iTerm2 or other apps.
+    override var canBecomeKey: Bool { true }
+
     func update(events: [AgentEvent]) {
         hostingView.rootView = NotificationCardView(
             events: events,
@@ -58,7 +62,6 @@ final class NotificationPanel: NSPanel {
     }
 
     func preferredHeight(for events: [AgentEvent]) -> CGFloat {
-        let count = max(1, events.count)
         let baseRowHeight: CGFloat = 76
         let headerHeight: CGFloat = 36
         let verticalPadding: CGFloat = 16
@@ -72,6 +75,10 @@ final class NotificationPanel: NSPanel {
             }
             if event.eventType == .permissionRequested, !event.paneId.isEmpty {
                 rowHeight += 24
+            }
+            if (event.eventType == .taskCompleted || event.eventType == .inputRequested),
+               !event.paneId.isEmpty {
+                rowHeight += 30
             }
             totalRowHeight += rowHeight
         }

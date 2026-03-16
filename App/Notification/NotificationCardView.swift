@@ -43,6 +43,7 @@ private struct EventCardRow: View {
     let onDismiss: (UUID) -> Void
     let onJump: (AgentEvent) -> Void
     let onSendKeys: (String, String, Bool) -> Void
+    @State private var replyText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -132,9 +133,44 @@ private struct EventCardRow: View {
                 }
                 .padding(.leading, 12)
             }
+
+            // Reply text field for completions and input requests
+            if (event.eventType == .taskCompleted || event.eventType == .inputRequested),
+               !event.paneId.isEmpty {
+                HStack(spacing: 6) {
+                    TextField("Reply...", text: $replyText)
+                        .textFieldStyle(.plain)
+                        .font(.system(.caption, design: .monospaced))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                        .onSubmit {
+                            sendReply()
+                        }
+
+                    Button {
+                        sendReply()
+                    } label: {
+                        Image(systemName: "paperplane.fill")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(replyText.isEmpty ? Color.secondary : Color.blue)
+                    .disabled(replyText.isEmpty)
+                }
+                .padding(.leading, 12)
+            }
         }
         .padding(8)
         .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func sendReply() {
+        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        onSendKeys(event.paneId, text, true)
+        replyText = ""
+        onDismiss(event.id)
     }
 
     private var eventColor: Color {
