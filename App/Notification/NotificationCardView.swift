@@ -4,9 +4,24 @@ import SentinelShared
 /// Aggregated notification card content.
 struct NotificationCardView: View {
     let events: [AgentEvent]
+    let selectedIndex: Int
     let onDismiss: (UUID) -> Void
     let onJump: (AgentEvent) -> Void
     let onSendKeys: (String, String, Bool) -> Void // (paneId, text, enterAfter)
+
+    init(
+        events: [AgentEvent],
+        selectedIndex: Int = -1,
+        onDismiss: @escaping (UUID) -> Void,
+        onJump: @escaping (AgentEvent) -> Void,
+        onSendKeys: @escaping (String, String, Bool) -> Void
+    ) {
+        self.events = events
+        self.selectedIndex = selectedIndex
+        self.onDismiss = onDismiss
+        self.onJump = onJump
+        self.onSendKeys = onSendKeys
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -20,9 +35,10 @@ struct NotificationCardView: View {
                     .foregroundStyle(.tertiary)
             }
 
-            ForEach(events) { event in
+            ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
                 EventCardRow(
                     event: event,
+                    isSelected: index == selectedIndex,
                     onDismiss: onDismiss,
                     onJump: onJump,
                     onSendKeys: onSendKeys
@@ -40,6 +56,7 @@ struct NotificationCardView: View {
 
 private struct EventCardRow: View {
     let event: AgentEvent
+    let isSelected: Bool
     let onDismiss: (UUID) -> Void
     let onJump: (AgentEvent) -> Void
     let onSendKeys: (String, String, Bool) -> Void
@@ -162,7 +179,13 @@ private struct EventCardRow: View {
             }
         }
         .padding(8)
-        .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.primary.opacity(isSelected ? 0.08 : 0.03), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            isSelected
+                ? RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.accentColor.opacity(0.5), lineWidth: 1.5)
+                : nil
+        )
     }
 
     private func sendReply() {

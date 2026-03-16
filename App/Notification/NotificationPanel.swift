@@ -58,12 +58,7 @@ final class NotificationPanel: NSPanel {
         if selectedIndex >= events.count {
             selectedIndex = max(0, events.count - 1)
         }
-        hostingView.rootView = NotificationCardView(
-            events: events,
-            onDismiss: onDismiss,
-            onJump: onJump,
-            onSendKeys: onSendKeys
-        )
+        refreshHostingView()
         let height = preferredHeight(for: events)
         setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: 380, height: height), display: true)
     }
@@ -105,6 +100,18 @@ final class NotificationPanel: NSPanel {
         return min(460, headerHeight + verticalPadding + CGFloat(max(1, eventCount)) * rowHeight)
     }
 
+    private func refreshHostingView() {
+        hostingView.rootView = NotificationCardView(
+            events: currentEvents,
+            selectedIndex: selectedIndex,
+            onDismiss: onDismiss,
+            onJump: onJump,
+            onSendKeys: onSendKeys
+        )
+        let height = preferredHeight(for: currentEvents)
+        setFrame(NSRect(x: frame.origin.x, y: frame.origin.y, width: 380, height: height), display: true)
+    }
+
     // MARK: - Keyboard navigation
 
     override func keyDown(with event: NSEvent) {
@@ -116,10 +123,10 @@ final class NotificationPanel: NSPanel {
         switch event.keyCode {
         case 126: // Up arrow
             selectedIndex = max(0, selectedIndex - 1)
-            jumpToSelectedEvent()
+            refreshHostingView()
         case 125: // Down arrow
             selectedIndex = min(currentEvents.count - 1, selectedIndex + 1)
-            jumpToSelectedEvent()
+            refreshHostingView()
         case 36: // Enter — jump to selected event's pane
             jumpToSelectedEvent()
         case 53: // Escape — dismiss selected event
