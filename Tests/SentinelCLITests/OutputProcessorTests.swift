@@ -1044,6 +1044,64 @@ final class OutputProcessorTests: XCTestCase {
         wait(for: [expectation], timeout: 2.0)
         XCTAssertNil(receivedEvent.value?.contextLines)
     }
+
+    func testOutputSilenceCompletionFiresWhenNoPromptDetected() {
+        let expectation = XCTestExpectation(description: "Silence completion fires")
+        let events = LockedBox<[AgentEvent]>([])
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "silence",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15,
+            outputSilenceCompletionSeconds: 0.3
+        ) { event in
+            events.withLock { $0.append(event) }
+            if event.matchedRule == "output-silence-completion" {
+                expectation.fulfill()
+            }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        // Simulate output that doesn't end with a prompt symbol
+        processor.processData("Here is my answer to your question.\n".data(using: .utf8)!)
+        processor.processData("The result is 42.\n".data(using: .utf8)!)
+
+        wait(for: [expectation], timeout: 2.0)
+        let silenceEvents = events.value.filter { $0.matchedRule == "output-silence-completion" }
+        XCTAssertEqual(silenceEvents.count, 1)
+        XCTAssertEqual(silenceEvents.first?.eventType, .taskCompleted)
+    }
+
+    func testOutputSilenceCompletionDoesNotFireWhenPromptDetected() {
+        let events = LockedBox<[AgentEvent]>([])
+
+        let rules = RuleEngine.effectiveRules(config: AppConfig())
+        let processor = OutputProcessor(
+            agentId: UUID(),
+            agentType: .claude,
+            displayLabel: "silence-suppressed",
+            rules: rules,
+            stallTimeout: 999,
+            promptCompletionQuietPeriod: 0.15,
+            outputSilenceCompletionSeconds: 0.5
+        ) { event in
+            events.withLock { $0.append(event) }
+        }
+
+        processor.noteUserInput("hello\n".data(using: .utf8)!)
+        processor.processData("Hello.\n".data(using: .utf8)!)
+        Thread.sleep(forTimeInterval: 0.3)
+        processor.processData("❯\n".data(using: .utf8)!)
+        // Wait past the silence timeout
+        Thread.sleep(forTimeInterval: 0.7)
+
+        let silenceEvents = events.value.filter { $0.matchedRule == "output-silence-completion" }
+        XCTAssertEqual(silenceEvents.count, 0, "Silence completion should not fire when prompt was detected")
+    }
 }
 
 private final class LockedBox<T>: @unchecked Sendable {

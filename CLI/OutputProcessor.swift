@@ -43,6 +43,10 @@ public final class OutputProcessor: @unchecked Sendable {
     private var recentContextLines: [String] = []
     private let maxContextLines = 5
 
+    // Output-silence completion detection (fallback when prompt detection misses)
+    private let outputSilenceCompletionSeconds: TimeInterval
+    private var silenceCompletionTimer: Task<Void, Never>?
+
     public init(
         agentId: UUID,
         agentType: AgentType,
@@ -57,6 +61,7 @@ public final class OutputProcessor: @unchecked Sendable {
         suppressInteractiveUntilFirstInput: Bool = false,
         promptCompletionQuietPeriod: TimeInterval = 0.6,
         codexCompletionQuietPeriod: TimeInterval = 3,
+        outputSilenceCompletionSeconds: TimeInterval = 5,
         onEvent: @escaping @Sendable (AgentEvent) -> Void
     ) {
         self.agentId = agentId
@@ -69,6 +74,7 @@ public final class OutputProcessor: @unchecked Sendable {
         self.rateLimitLinesPerSec = rateLimitLinesPerSec
         self.debugMode = debugMode
         self.suppressInteractiveUntilFirstInput = suppressInteractiveUntilFirstInput
+        self.outputSilenceCompletionSeconds = outputSilenceCompletionSeconds
         self.onEvent = onEvent
 
         if debugMode {
@@ -172,6 +178,7 @@ public final class OutputProcessor: @unchecked Sendable {
         }
 
         processBufferedCandidate()
+        scheduleSilenceCompletionIfNeeded()
     }
 
     /// Flush any remaining buffered content (call when PTY closes).
@@ -185,6 +192,7 @@ public final class OutputProcessor: @unchecked Sendable {
             lineBuffer = ""
         }
         stallDetector.cancel()
+        silenceCompletionTimer?.cancel()
         completionDetector.cancelTimers()
     }
 
@@ -201,6 +209,7 @@ public final class OutputProcessor: @unchecked Sendable {
 
         lastUserInputAt = Date()
         stallDetector.reset()
+        silenceCompletionTimer?.cancel()
         completionDetector.resetTurn()
 
         guard suppressInteractiveUntilFirstInput, !hasObservedUserInput else { return true }
@@ -350,6 +359,45 @@ public final class OutputProcessor: @unchecked Sendable {
         }
     }
 
+    private func scheduleSilenceCompletionIfNeeded() {
+        // Only fire after user input started a turn and assistant produced output
+        guard lastUserInputAt != nil else { return }
+        guard completionDetector.hasSeenAssistantOutput else { return }
+        guard !completionDetector.hasEmittedCompletion else { return }
+        guard outputSilenceCompletionSeconds > 0 else { return }
+
+        silenceCompletionTimer?.cancel()
+        silenceCompletionTimer = Task.detached { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.outputSilenceCompletionSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            guard !self.completionDetector.hasEmittedCompletion else { return }
+            guard self.completionDetector.hasSeenAssistantOutput else { return }
+
+            self.completionDetector.markCompletionEmitted()
+            let summary = self.completionDetector.latestSummary.isEmpty
+                ? "Response completed"
+                : self.completionDetector.latestSummary
+
+            let event = AgentEvent(
+                agentId: self.agentId,
+                agentType: self.agentType,
+                displayLabel: self.displayLabel,
+                eventType: .taskCompleted,
+                summary: summary,
+                matchedRule: "output-silence-completion",
+                priority: .normal,
+                shouldNotify: true,
+                dedupeKey: "\(self.agentId.uuidString)|silence-completion|\(self.stableKeyFragment(from: summary))",
+                paneId: self.paneId,
+                windowId: self.windowId,
+                sessionName: self.sessionName,
+                contextLines: self.recentContextLines.isEmpty ? nil : self.recentContextLines
+            )
+            self.onEvent(event)
+        }
+    }
+
     private func emitMatchedEvent(_ match: RuleEngine.MatchResult, summary: String) {
         let eventSummary: String
         if match.rule.eventType == .taskCompleted, isPromptLikeLine(summary) {
@@ -366,6 +414,7 @@ public final class OutputProcessor: @unchecked Sendable {
 
         if match.rule.eventType == .taskCompleted {
             completionDetector.markCompletionEmitted()
+            silenceCompletionTimer?.cancel()
         }
 
         if debugMode, let fh = debugFile {
