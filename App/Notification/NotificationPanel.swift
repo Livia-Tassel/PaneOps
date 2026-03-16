@@ -3,11 +3,14 @@ import SwiftUI
 import SentinelShared
 
 /// A single floating panel that aggregates multiple notification events.
+/// Supports keyboard navigation: ↑/↓ to select, Enter to jump, Y/N for permission, Esc to dismiss.
 final class NotificationPanel: NSPanel {
     private let onDismiss: (UUID) -> Void
     private let onJump: (AgentEvent) -> Void
     private let onSendKeys: (String, String, Bool) -> Void
     private let hostingView: NSHostingView<NotificationCardView>
+    private var currentEvents: [AgentEvent] = []
+    private var selectedIndex: Int = 0
 
     init(
         onDismiss: @escaping (UUID) -> Void,
@@ -51,6 +54,10 @@ final class NotificationPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
     func update(events: [AgentEvent]) {
+        currentEvents = events
+        if selectedIndex >= events.count {
+            selectedIndex = max(0, events.count - 1)
+        }
         hostingView.rootView = NotificationCardView(
             events: events,
             onDismiss: onDismiss,
@@ -96,6 +103,52 @@ final class NotificationPanel: NSPanel {
         let headerHeight: CGFloat = 36
         let verticalPadding: CGFloat = 16
         return min(460, headerHeight + verticalPadding + CGFloat(max(1, eventCount)) * rowHeight)
+    }
+
+    // MARK: - Keyboard navigation
+
+    override func keyDown(with event: NSEvent) {
+        guard !currentEvents.isEmpty else {
+            super.keyDown(with: event)
+            return
+        }
+
+        switch event.keyCode {
+        case 126: // Up arrow
+            selectedIndex = max(0, selectedIndex - 1)
+            jumpToSelectedEvent()
+        case 125: // Down arrow
+            selectedIndex = min(currentEvents.count - 1, selectedIndex + 1)
+            jumpToSelectedEvent()
+        case 36: // Enter — jump to selected event's pane
+            jumpToSelectedEvent()
+        case 53: // Escape — dismiss selected event
+            let selected = currentEvents[selectedIndex]
+            onDismiss(selected.id)
+        default:
+            if let chars = event.characters?.lowercased() {
+                let selected = currentEvents[selectedIndex]
+                if chars == "y", selected.eventType == .permissionRequested, !selected.paneId.isEmpty {
+                    onSendKeys(selected.paneId, "y", true)
+                    onDismiss(selected.id)
+                } else if chars == "n", selected.eventType == .permissionRequested, !selected.paneId.isEmpty {
+                    onSendKeys(selected.paneId, "n", true)
+                    onDismiss(selected.id)
+                } else if chars == "j" {
+                    jumpToSelectedEvent()
+                } else {
+                    super.keyDown(with: event)
+                }
+            } else {
+                super.keyDown(with: event)
+            }
+        }
+    }
+
+    private func jumpToSelectedEvent() {
+        guard selectedIndex < currentEvents.count else { return }
+        let selected = currentEvents[selectedIndex]
+        onJump(selected)
     }
 
     func dismissAnimated(completion: (() -> Void)? = nil) {
