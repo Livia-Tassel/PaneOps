@@ -283,6 +283,21 @@ Before matching, each line passes through `normalizedLineForMatching()`:
 
 ---
 
+## Context Lines Buffer
+
+OutputProcessor maintains a 5-line ring buffer of recently processed stripped lines.
+When emitting events for actionable types (`permissionRequested`, `inputRequested`,
+`taskCompleted`), the buffer contents are attached as `AgentEvent.contextLines`.
+
+- **Buffer size:** 5 lines (configurable via `maxContextLines`)
+- **Content:** ANSI-stripped, normalized lines (same as what rule matching sees)
+- **Attached to:** permission, input, and completion events only
+- **Not attached to:** error and stall events (`contextLines` is `nil`)
+- **Purpose:** Provides popup notification with recent output context so the user
+  can decide whether to click Yes/No or what reply to type
+
+---
+
 ## Stall Detection
 
 - On init: starts `stallTimer` (detached Task, sleeps for `stallTimeout`)

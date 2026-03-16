@@ -106,7 +106,21 @@ Menu Bar App (UI subscriber)
 | Done | OutputProcessor decomposition | 6 types extracted, 40% reduction |
 | Done | MonitorState decomposition | 3 types extracted, 21% reduction |
 | Done | Code review + data race fix | All 9 types clean |
+| Done | Interactive notifications | Yes/No buttons, reply field, context display |
 | Low | SettingsView tab split | Cosmetic, 314 LOC, do when touching settings |
 | Future | Swift 6 concurrency migration | Foundation is laid (locks, protocols, value types) |
 | Future | Integration tests | Spin up monitor + wrapper, verify end-to-end |
 | Future | New agent support | Add GeminiCompletionDetector via protocol |
+
+## Interactive Notification Feature (Completed)
+
+**Architecture:** App → Monitor → `tmux send-keys` (no CLI wrapper changes)
+
+| Capability | How It Works |
+|---|---|
+| Permission Yes/No | Green/Red buttons → sends "y"/"n" + Enter to agent's tmux pane |
+| Reply text field | TextField on completion/input events → sends typed text + Enter on submit |
+| Context display | Last 5 stripped output lines shown in monospaced block above actions |
+| Jump to pane | Existing feature, one-click switch to agent's tmux pane + iTerm2 |
+
+**Data flow:** Button/Enter → NotificationManager → AppDelegate → IPCService.send(.sendKeys) → Monitor → TmuxClient.sendKeys → `tmux send-keys -t %pane -l "text"`

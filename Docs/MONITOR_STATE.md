@@ -169,6 +169,12 @@ After completion, broadcasts a fresh snapshot.
 1. Find event by ID, set `acknowledged = true`
 2. Persist events, broadcast `ack(messageId)`
 
+### sendKeys(SendKeysRequest)
+
+1. Call `tmux.sendKeys(to: request.paneId, text: request.text, enterAfter: request.enterAfter)`
+2. Log warning on failure
+3. No state mutation, no broadcast — point-to-point action
+
 ---
 
 ## Event Deduplication

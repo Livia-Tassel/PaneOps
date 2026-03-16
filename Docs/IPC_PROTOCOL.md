@@ -13,7 +13,7 @@ Three process types participate:
 |---|---|---|---|
 | **CLI Wrapper** (`agent-sentinel run`) | Per-agent PTY monitor | register, event, heartbeat, activity, resume, deregister | (none — fire-and-forget) |
 | **Monitor Daemon** (`sentinel-monitor`) | State authority | snapshot, event (broadcast), configUpdate (broadcast) | All message types |
-| **Menu Bar App** (`SentinelApp`) | UI subscriber | subscribe, ack, configUpdate, maintenance | snapshot, event, register, deregister, heartbeat, activity, resume, configUpdate |
+| **Menu Bar App** (`SentinelApp`) | UI subscriber | subscribe, ack, configUpdate, maintenance, sendKeys | snapshot, event, register, deregister, heartbeat, activity, resume, configUpdate |
 
 **Socket path:** `~/.agent-sentinel/monitor.sock`
 **Permissions:** `0600` (owner only)
@@ -240,6 +240,28 @@ updated config to all subscribers (including CLI wrappers for hot rule reload).
 **Direction:** App → Monitor
 **When:** User triggers maintenance action (e.g., clear history)
 **Payload:** `MaintenanceRequest`
+
+### sendKeys
+
+**Direction:** App → Monitor
+**When:** User clicks Yes/No on a permission notification, or types a reply and hits Enter
+**Payload:** `SendKeysRequest`
+
+```json
+{
+  "type": "sendKeys",
+  "payload": {
+    "paneId": "%5",
+    "text": "y",
+    "enterAfter": true
+  }
+}
+```
+
+**Monitor behavior:** Calls `TmuxClient.sendKeys(to: paneId, text: text, enterAfter: enterAfter)`.
+Uses `tmux send-keys -t paneId -l -- text` (literal, no injection risk) followed by
+`tmux send-keys -t paneId Enter` if `enterAfter` is true. Logs warning on failure.
+No broadcast — this is a point-to-point action.
 
 ---
 
