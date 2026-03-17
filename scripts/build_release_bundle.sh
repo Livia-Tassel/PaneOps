@@ -38,8 +38,11 @@ fi
 
 echo "==> Preparing release directory"
 if [[ -d "${RELEASE_DIR}" ]]; then
-  chmod -R u+rwx "${RELEASE_DIR}" 2>/dev/null || true
-  rm -rf "${RELEASE_DIR}"
+  rm -rf "${RELEASE_DIR}" 2>/dev/null || {
+    echo "Cannot remove ${RELEASE_DIR} (root-owned files from previous sudo install)." >&2
+    echo "Fix: sudo rm -rf dist/" >&2
+    exit 1
+  }
 fi
 mkdir -p "${RELEASE_DIR}/bin" "${APP_MACOS}" "${APP_RESOURCES}" "${RELEASE_DIR}/docs"
 

@@ -52,6 +52,7 @@ run: build
 	@sleep 0.3
 	@if pgrep -f '(^|/)$(APP_BINARY)$$' >/dev/null 2>&1; then \
 		echo "Ready. Use 'make stop' to shut down, 'make logs' for diagnostics."; \
+		echo "Wrap an agent: $(BUILD_DIR)/debug/$(CLI_NAME) run -- <command>"; \
 	else \
 		echo "App failed to start. Check: make logs"; \
 		exit 1; \
@@ -231,9 +232,14 @@ logs:
 test: sync-version
 	$(SWIFT_TEST)
 
-# Clean build artifacts
+# Clean build and dist artifacts
 clean:
 	rm -rf $(BUILD_DIR)
+	@if [ -d dist ]; then \
+		rm -rf dist 2>/dev/null || { \
+			echo "Some dist/ files are root-owned. Run: sudo rm -rf dist/"; \
+		}; \
+	fi
 
 # Format code (if swift-format is installed)
 format:
