@@ -32,6 +32,7 @@ final class NotificationManager: @unchecked Sendable {
         ensurePanel()
         refreshPanel()
         scheduleDismissTimer(for: event)
+        playAlertIfNeeded(for: event)
     }
 
     func dismiss(eventId: UUID) {
@@ -164,6 +165,19 @@ final class NotificationManager: @unchecked Sendable {
             }
         } else {
             panel.orderFrontRegardless()
+        }
+    }
+
+    private func playAlertIfNeeded(for event: AgentEvent) {
+        switch event.eventType {
+        case .permissionRequested:
+            NSSound(named: "Funk")?.play()
+        case .inputRequested:
+            NSSound(named: "Glass")?.play()
+        case .taskCompleted:
+            NSSound(named: "Pop")?.play()
+        case .errorDetected, .stalledOrWaiting:
+            break
         }
     }
 
